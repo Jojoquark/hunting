@@ -32,6 +32,8 @@ export class GeoTracker {
   public wakeLockSentinel: any = null;
   public wakeLockUnterstuetzt = false;
   public wakeLockAktiv = false;
+  public wakeLockErwuenscht = false;
+  public kompassRichtung: number | null = null;
 
   private callbacks: Set<GeoPositionsCallback> = new Set();
 
@@ -39,10 +41,22 @@ export class GeoTracker {
     if (typeof window !== 'undefined') {
       this.wakeLockUnterstuetzt = 'wakeLock' in navigator;
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && this.wakeLockAktiv && !this.wakeLockSentinel) {
+        if (document.visibilityState === 'visible' && this.wakeLockErwuenscht && !this.wakeLockAktiv) {
           this.aktiviereWakeLock().catch(() => {});
         }
       });
+
+      window.addEventListener('deviceorientation', (ev: DeviceOrientationEvent) => {
+        let heading: number | null = null;
+        if ('webkitCompassHeading' in ev && typeof (ev as any).webkitCompassHeading === 'number') {
+          heading = (ev as any).webkitCompassHeading;
+        } else if (ev.alpha !== null && !isNaN(ev.alpha)) {
+          heading = (360 - ev.alpha) % 360;
+        }
+        if (heading !== null) {
+          this.kompassRichtung = heading;
+        }
+      }, true);
     }
   }
 
@@ -189,7 +203,8 @@ export class GeoTracker {
         Math.cos((lat2 * Math.PI) / 180) *
         Math.sin(dLon / 2) *
         Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const aSafe = Math.min(1, Math.max(0, a));
+    const c = 2 * Math.atan2(Math.sqrt(aSafe), Math.sqrt(Math.max(0, 1 - aSafe)));
     return R * c;
   }
 
@@ -216,6 +231,7 @@ export class GeoTracker {
   // --- Screen Wake Lock API ---
 
   public async aktiviereWakeLock(): Promise<boolean> {
+    this.wakeLockErwuenscht = true;
     if (!this.wakeLockUnterstuetzt) return false;
     try {
       this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
@@ -233,6 +249,7 @@ export class GeoTracker {
   }
 
   public async deaktiviereWakeLock(): Promise<void> {
+    this.wakeLockErwuenscht = false;
     if (this.wakeLockSentinel) {
       try {
         await this.wakeLockSentinel.release();

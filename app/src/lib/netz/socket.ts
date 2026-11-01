@@ -43,7 +43,21 @@ export class GameSocket {
   public spielCode: string = '';
   public spielerId: string = '';
 
-  constructor() {}
+  constructor() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => {
+        if ((this.status === 'reconnect' || this.status === 'getrennt') && this.url) {
+          if (this.reconnectTimer !== null) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+          }
+          this.reconnectVersuch = 0;
+          this.setStatus('reconnect');
+          this.initialisiereWebSocket();
+        }
+      });
+    }
+  }
 
   /**
    * Startet die Verbindung zum Durable Object
@@ -286,8 +300,8 @@ export class GameSocket {
     this.senden('fangAntwort', { fangId, bestaetigt });
   }
 
-  public sendQrFang(token: string): void {
-    this.senden('qrFang', { token });
+  public sendQrFang(zielId: string, token: string): void {
+    this.senden('qrFang', { zielId, token });
   }
 
   public sendFaehigkeit(id: string, params?: { zielId?: string; lat?: number; lng?: number }): void {

@@ -19,9 +19,11 @@ const CORS_HEADERS = {
 
 function erzeugeSpielCode(): string {
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const array = new Uint8Array(6);
+  crypto.getRandomValues(array);
   let res = '';
   for (let i = 0; i < 6; i++) {
-    res += chars.charAt(Math.floor(Math.random() * chars.length));
+    res += chars.charAt(array[i] % chars.length);
   }
   return res;
 }

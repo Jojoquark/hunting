@@ -52,6 +52,22 @@
   let ticketHaltestelle = $state('');
   let haltestellenVorschlaege = $state<string[]>(['Hauptbahnhof (Gleis 1-4)', 'Zentrum / Rathaus', 'Universitätsplatz', 'Stadtpark Nord']);
 
+  // QR-Fang Formular & Code
+  let qrEingabeZielId = $state('');
+  let qrEingabeToken = $state('');
+  let qrStatusMeldung = $state<string | null>(null);
+
+  let aktuellerQrToken = $derived.by(() => {
+    const slot = Math.floor(serverZeit / 30000);
+    let h = 0x811c9dc5;
+    const str = `${spielerId}:${slot}`;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16).padStart(8, '0').toUpperCase();
+  });
+
   // Timer-Loop für synchrone Countdowns
   let timerIntervall: number | null = null;
 
@@ -114,6 +130,8 @@
             spielZustand.ungeleseneNachrichten++;
           }
         }
+      } else if (msg.typ === 'fang_abgelehnt') {
+        qrStatusMeldung = `Abgelehnt: ${msg.daten?.grund || msg.daten || 'Ungültig'}`;
       }
     });
 
@@ -164,6 +182,13 @@
     });
     chatEingabe = '';
   }
+
+  function sendeQrFang() {
+    if (!qrEingabeZielId.trim() || !qrEingabeToken.trim()) return;
+    klang.klick();
+    spielNetz.sendQrFang(qrEingabeZielId.trim(), qrEingabeToken.trim());
+    qrStatusMeldung = 'QR-Fang übermittelt...';
+  }
 </script>
 
 <div class="hud-overlay">
@@ -202,6 +227,14 @@
       <div class="warn-titel">{de.hud.warnungen.zoneVerlassenTitel}</div>
       <div class="warn-text">{de.hud.warnungen.zoneVerlassenText}</div>
       <div class="warn-kulanz">{de.hud.warnungen.zoneKulanz.replace('%s', spielZustand.kulanzSekunden.toString())}</div>
+    </div>
+  {:else if spielZustand.funklochStrafe || (spielZustand.funklochRestSekunden && spielZustand.funklochRestSekunden > 0)}
+    <div class="warn-banner funkloch-warnung">
+      <div class="warn-titel">Funkloch-Strafe aktiv</div>
+      <div class="warn-text">Deine Position ist für alle sichtbar wegen Verbindungsunterbrechung!</div>
+      {#if spielZustand.funklochRestSekunden}
+        <div class="warn-kulanz">Restdauer: {spielZustand.funklochRestSekunden}s</div>
+      {/if}
     </div>
   {:else if spielZustand.seekerInDerNaehe && (rolle === 'hider' || rolle === 'mrx')}
     <div class="warn-banner seeker-warnung">
@@ -283,6 +316,20 @@
         <span class="chat-badge">{spielZustand.ungeleseneNachrichten}</span>
       {/if}
       <span>{de.hud.aktionen.chat}</span>
+    </button>
+
+    <button
+      type="button"
+      class="aktions-knopf sekundar qr-toggle"
+      onclick={() => (offenesSheet = 'qr')}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect width="6" height="6" x="3" y="3" rx="1"/>
+        <rect width="6" height="6" x="15" y="3" rx="1"/>
+        <rect width="6" height="6" x="3" y="15" rx="1"/>
+        <path d="M15 15h2v2h-2zM19 15h2v6h-6v-2h4v-4zM15 19h2v2h-2z"/>
+      </svg>
+      <span>QR</span>
     </button>
   </footer>
 
@@ -421,6 +468,53 @@
         <button type="button" class="haupt-knopf" onclick={sendeTicket}>
           Fahrt verbindlich buchen
         </button>
+
+      <!-- D. QR-SHEET -->
+      {:else if offenesSheet === 'qr'}
+        <div class="sheet-kopf">
+          <h3>QR-Fang & Nachweis</h3>
+        </div>
+
+        <div class="qr-sheet-inhalt">
+          {#if kannFangen}
+            <div class="qr-abschnitt">
+              <h4>Gegner per QR fangen</h4>
+              <p class="qr-hinweis">Gib den Code des gestellten Spielers ein, wenn das GPS-Signal ungenau oder gestört ist:</p>
+              <form class="qr-form" onsubmit={(e) => { e.preventDefault(); sendeQrFang(); }}>
+                <input
+                  type="text"
+                  bind:value={qrEingabeZielId}
+                  placeholder="Spieler-ID des Ziels"
+                  class="eingabe-feld"
+                  required
+                />
+                <input
+                  type="text"
+                  bind:value={qrEingabeToken}
+                  placeholder="8-stelliger Token"
+                  class="eingabe-feld"
+                  required
+                />
+                <button type="submit" class="haupt-knopf">
+                  QR-Fang bestätigen
+                </button>
+              </form>
+              {#if qrStatusMeldung}
+                <div class="qr-status">{qrStatusMeldung}</div>
+              {/if}
+            </div>
+          {:else}
+            <div class="qr-abschnitt">
+              <h4>Dein Fang-Token</h4>
+              <p class="qr-hinweis">Zeige diesen rotierenden Code dem Jäger, wenn du physisch gefangen wurdest:</p>
+              <div class="qr-token-box">
+                <span class="qr-spieler-id">{spielerId}</span>
+                <span class="qr-code-display">{aktuellerQrToken}</span>
+              </div>
+              <p class="qr-hinweis" style="text-align: center; margin-top: 8px;">Aktualisiert alle 30 Sekunden automatisch</p>
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   {/if}
@@ -537,6 +631,12 @@
   .seeker-warnung {
     background: rgba(255, 92, 0, 0.92);
     color: #fff;
+  }
+
+  .funkloch-warnung {
+    background: rgba(220, 38, 38, 0.92);
+    color: #fff;
+    box-shadow: 0 0 24px rgba(220, 38, 38, 0.5);
   }
 
   .warn-titel {
@@ -873,4 +973,56 @@
     font-size: 0.75rem;
     cursor: pointer;
   }
-</script>
+
+  /* 5. QR-SHEET & STYLES */
+  .qr-sheet-inhalt {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 12px 0;
+  }
+  .qr-abschnitt h4 {
+    margin: 0 0 6px 0;
+    font-size: 1rem;
+    color: #f2f2ee;
+  }
+  .qr-hinweis {
+    font-size: 0.85rem;
+    color: #a3a3ad;
+    margin: 0 0 12px 0;
+  }
+  .qr-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .qr-token-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #121216;
+    border: 2px dashed #ff5c00;
+    border-radius: 16px;
+    padding: 20px;
+    gap: 8px;
+  }
+  .qr-spieler-id {
+    font-size: 0.85rem;
+    color: #a3a3ad;
+    text-transform: uppercase;
+  }
+  .qr-code-display {
+    font-family: inherit;
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: 0.15em;
+    color: #ff5c00;
+  }
+  .qr-status {
+    font-size: 0.85rem;
+    color: #ff5c00;
+    text-align: center;
+    margin-top: 8px;
+  }
+</style>

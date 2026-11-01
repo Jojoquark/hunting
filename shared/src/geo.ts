@@ -25,7 +25,8 @@ export function haversineDistanz(p1: Koordinate, p2: Koordinate): number {
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const aSafe = Math.min(1, Math.max(0, a));
+  const c = 2 * Math.atan2(Math.sqrt(aSafe), Math.sqrt(Math.max(0, 1 - aSafe)));
   return ERDRADIUS_METER * c;
 }
 
@@ -72,10 +73,10 @@ export function zielPunkt(
   const phi1 = gradZuBogen(start.lat);
   const lambda1 = gradZuBogen(start.lng);
 
-  const phi2 = Math.asin(
+  const sinPhi2 =
     Math.sin(phi1) * Math.cos(delta) +
-      Math.cos(phi1) * Math.sin(delta) * Math.cos(theta)
-  );
+    Math.cos(phi1) * Math.sin(delta) * Math.cos(theta);
+  const phi2 = Math.asin(Math.min(1, Math.max(-1, sinPhi2)));
   const lambda2 =
     lambda1 +
     Math.atan2(

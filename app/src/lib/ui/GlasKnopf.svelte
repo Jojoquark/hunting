@@ -59,7 +59,8 @@
   }
 
   .groesse-sm {
-    height: 38px;
+    min-height: 44px;
+    height: 44px;
     padding: 0 16px;
     font-size: 0.875rem;
   }

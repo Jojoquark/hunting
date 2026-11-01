@@ -1,5 +1,12 @@
 import { PushAbo } from './types';
 
+const ERLAUBTE_PUSH_DOMAINS = [
+  'fcm.googleapis.com',
+  'push.apple.com',
+  'notify.windows.com',
+  'updates.push.services.mozilla.com'
+];
+
 export async function sendeWebPush(
   abo: PushAbo,
   payload: { titel: string; nachricht: string; url?: string },
@@ -7,8 +14,20 @@ export async function sendeWebPush(
   vapidPublic: string
 ): Promise<boolean> {
   try {
+    const endpointUrl = new URL(abo.endpoint);
+    if (endpointUrl.protocol !== 'https:') {
+      return false;
+    }
+
+    const hostErlaubt = ERLAUBTE_PUSH_DOMAINS.some(
+      (d) => endpointUrl.hostname === d || endpointUrl.hostname.endsWith('.' + d)
+    );
+    if (!hostErlaubt) {
+      return false;
+    }
+
     // VAPID Authorization Header via WebCrypto
-    const audience = new URL(abo.endpoint).origin;
+    const audience = endpointUrl.origin;
     const jwt = await erzeugeVapidToken(audience, vapidPrivate, vapidPublic);
 
     const body = JSON.stringify(payload);

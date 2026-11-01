@@ -56,11 +56,30 @@ export class GameRoom {
     `);
   }
 
-  async fetch(request: Request): Promise<Response> {
+  private async stelleInitialisierungSicher(): Promise<void> {
+    if (this.zustand) return;
     await this.initialisiereSqlite();
     await this.ladeZustand();
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    await this.stelleInitialisierungSicher();
 
     const url = new URL(request.url);
+
+    // POST /push/abo
+    if (request.method === 'POST' && url.pathname.endsWith('/push/abo')) {
+      const body = (await request.json()) as any;
+      if (body.spielerId && body.abo) {
+        this.state.storage.sql.exec(
+          `INSERT OR REPLACE INTO push_abos (spieler_id, daten) VALUES (?, ?)`,
+          body.spielerId,
+          JSON.stringify(body.abo)
+        );
+        return Response.json({ gespeichert: true });
+      }
+      return new Response('Ungültige Daten', { status: 400 });
+    }
 
     if (url.pathname.endsWith('/ws')) {
       const upgradeHeader = request.headers.get('Upgrade');
@@ -78,17 +97,31 @@ export class GameRoom {
     }
 
     if (url.pathname.endsWith('/replay')) {
+      if (this.zustand.phase !== 'ende') {
+        return new Response(JSON.stringify({ fehler: 'Replay erst nach Spielende verfügbar' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
       const rows = this.state.storage.sql.exec(
         `SELECT spieler_id, lat, lng, zeit FROM positionen_replay ORDER BY zeit ASC`
       ).toArray();
       return Response.json({ code: this.zustand.code, punkte: rows });
     }
 
-    return Response.json(this.filtereZustandFuerSpieler('host'));
+    // Bereinigtes öffentliches JSON (niemals Koordinaten leaken!)
+    return Response.json({
+      code: this.zustand.code,
+      phase: this.zustand.phase,
+      modus: this.zustand.modus,
+      spielerAnzahl: Object.keys(this.zustand.spieler).length,
+      einstellungen: this.zustand.einstellungen
+    });
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') return;
+    await this.stelleInitialisierungSicher();
     try {
       const daten = JSON.parse(message);
       await this.verarbeiteAktion(ws, daten);
@@ -98,6 +131,7 @@ export class GameRoom {
   }
 
   async webSocketClose(ws: WebSocket): Promise<void> {
+    await this.stelleInitialisierungSicher();
     const spielerId = this.state.getTags(ws)[0];
     if (spielerId && this.zustand.spieler[spielerId]) {
       this.zustand.spieler[spielerId].online = false;
@@ -106,8 +140,23 @@ export class GameRoom {
     }
   }
 
-  private async verarbeiteAktion(ws: WebSocket, aktion: any): Promise<void> {
+  private async verarbeiteAktion(ws: WebSocket, raw: any): Promise<void> {
     this.zustand.jetzt = Date.now();
+    const aktion = (raw && raw.payload && typeof raw.payload === 'object')
+      ? { ...raw.payload, ...raw, typ: raw.typ }
+      : raw;
+    if (aktion.typ === 'qrFang') aktion.typ = 'qr_fang';
+    if (aktion.typ === 'ort' && !aktion.position) {
+      if (aktion.lat !== undefined) {
+        aktion.position = {
+          lat: aktion.lat,
+          lng: aktion.lng,
+          genauigkeit: aktion.genauigkeit ?? 5,
+          zeit: aktion.zeit ?? Date.now(),
+          tempo: aktion.tempo
+        };
+      }
+    }
 
     switch (aktion.typ) {
       case 'hallo': {
@@ -158,7 +207,7 @@ export class GameRoom {
 
         // Plausibilitätscheck: Geschwindigkeitsprüfung (> 50 m/s Teleport)
         if (sp.position) {
-          const dt = Math.max(0.1, (pos.zeit - sp.position.zeit) / 1000);
+          const dt = Math.max(0.1, (this.zustand.jetzt - (sp.letztesUpdateZeit || this.zustand.jetzt)) / 1000);
           const dist = haversineDistanz(sp.position, pos);
           if (dist / dt > 50) {
             console.warn(`Verdächtiger GPS-Sprung von ${sp.spitzname}: ${dist.toFixed(0)}m in ${dt.toFixed(1)}s`);
@@ -188,6 +237,11 @@ export class GameRoom {
               if (this.zustand.jetzt - (sp.ausserhalbZoneSeit || 0) > kulanzMs) {
                 sp.gefangen = true;
                 sp.gefangenUm = this.zustand.jetzt;
+                if (this.zustand.modus === 'zombie') {
+                  verwandleInZombie(sp, undefined, this.zustand);
+                } else if (this.zustand.modus === 'klassisch') {
+                  sp.rolle = 'zuschauer';
+                }
               }
             }
           } else {
@@ -201,6 +255,11 @@ export class GameRoom {
           // Mr. X Distanz-Aufdeckung prüfen
           if (this.zustand.modus === 'mrx' && sp.rolle === 'mrx') {
             pruefeMrXEntfernungsAufdeckung(sp, this.zustand);
+          }
+          if (this.zustand.modus === 'mrx' && sp.rolle === 'detektiv') {
+            if (pruefeDetektivTempo(sp)) {
+              this.broadcastEreignis({ typ: 'detektiv_tempo_warnung', spielerId: sp.id });
+            }
           }
         }
 
@@ -218,7 +277,33 @@ export class GameRoom {
         if (!faenger || !ziel || ziel.gefangen) return;
         if (!faenger.position || !ziel.position) return;
 
-        // Prüfungen: Abstand, Frische (<= 15s), Schild, Störsender
+        // Rollen-Validierung
+        const faengerDarfFangen = faenger.rolle === 'seeker' || faenger.rolle === 'zombie' || faenger.rolle === 'detektiv';
+        const zielDarfGefangenWerden = (ziel.rolle === 'hider' || ziel.rolle === 'mrx' || (this.zustand.modus === 'zombie' && ziel.rolle !== 'zombie')) && !ziel.gefangen;
+        if (!faengerDarfFangen || !zielDarfGefangenWerden) {
+          ws.send(JSON.stringify({ typ: 'fang_abgelehnt', grund: 'Ungültige Rollenkonstellation' }));
+          return;
+        }
+
+        // GPS-Frische (<= 15s)
+        const alterFaenger = (this.zustand.jetzt - (faenger.letztesUpdateZeit || 0)) / 1000;
+        const alterZiel = (this.zustand.jetzt - (ziel.letztesUpdateZeit || 0)) / 1000;
+        if (alterFaenger > 15 || alterZiel > 15) {
+          ws.send(JSON.stringify({ typ: 'fang_abgelehnt', grund: 'Standortsignal zu alt (> 15s)' }));
+          return;
+        }
+
+        // Störsender prüfen (150m Umkreis)
+        for (const s of Object.values(this.zustand.spieler)) {
+          if (s.faehigkeitenStatus.stoersenderBis && this.zustand.jetzt < s.faehigkeitenStatus.stoersenderBis && s.position) {
+            if (haversineDistanz(faenger.position, s.position) <= 150) {
+              ws.send(JSON.stringify({ typ: 'fang_abgelehnt', grund: 'Störsender in Reichweite aktiv' }));
+              return;
+            }
+          }
+        }
+
+        // Prüfungen: Abstand, Schild
         const distanz = haversineDistanz(faenger.position, ziel.position);
         const maxDistanz = this.zustand.einstellungen.fangRadiusMeter + Math.min(ziel.position.genauigkeit, 20);
 
@@ -258,6 +343,14 @@ export class GameRoom {
         const faenger = this.zustand.spieler[faengerId];
 
         if (!ziel || !faenger || ziel.gefangen) return;
+
+        // Rollen-Validierung
+        const faengerDarfFangen = faenger.rolle === 'seeker' || faenger.rolle === 'zombie' || faenger.rolle === 'detektiv';
+        const zielDarfGefangenWerden = (ziel.rolle === 'hider' || ziel.rolle === 'mrx' || (this.zustand.modus === 'zombie' && ziel.rolle !== 'zombie')) && !ziel.gefangen;
+        if (!faengerDarfFangen || !zielDarfGefangenWerden) {
+          ws.send(JSON.stringify({ typ: 'fang_abgelehnt', grund: 'Ungültige Rollenkonstellation' }));
+          return;
+        }
 
         const secret = this.env.QR_SECRET || 'hunting-default-qr-secret';
         const gueltig = await this.verifiziereQrToken(zielId, token, secret);
@@ -318,7 +411,14 @@ export class GameRoom {
   }
 
   async alarm(): Promise<void> {
+    await this.stelleInitialisierungSicher();
     this.zustand.jetzt = Date.now();
+
+    for (const sp of Object.values(this.zustand.spieler)) {
+      if (!sp.gefangen) {
+        sp.energie = Math.min(100, sp.energie + (5 / 6));
+      }
+    }
 
     if (this.zustand.phase === 'verstecken') {
       const endeVerstecken = this.zustand.phasenStartZeit + this.zustand.einstellungen.versteckZeitMinuten * 60000;
@@ -336,12 +436,19 @@ export class GameRoom {
 
       // 2. T-60s Push Benachrichtigung?
       const vorlaufMs = 60000;
-      if (this.zustand.naechsterPingZeit - this.zustand.jetzt <= vorlaufMs) {
+      const diff = this.zustand.naechsterPingZeit - this.zustand.jetzt;
+      if (diff <= vorlaufMs && !(this.zustand as any).vorabPushGesendet) {
+        (this.zustand as any).vorabPushGesendet = true;
         await this.sendeVorabPush();
       }
 
       // 3. Loot spawnen alle 5 Min.
-      spawneLootPunkt(this.zustand);
+      if (!this.zustand.letzterLootSpawn || this.zustand.jetzt - this.zustand.letzterLootSpawn >= 300000) {
+        if (this.zustand.lootPunkte.length < 5) {
+          spawneLootPunkt(this.zustand);
+        }
+        this.zustand.letzterLootSpawn = this.zustand.jetzt;
+      }
 
       // 4. Sieg prüfen
       this.pruefeSieg();
@@ -381,6 +488,7 @@ export class GameRoom {
   private planeNaechstenPing(): void {
     const intervallMs = this.zustand.einstellungen.pingIntervallMinuten * 60000;
     this.zustand.naechsterPingZeit = this.zustand.jetzt + intervallMs;
+    (this.zustand as any).vorabPushGesendet = false;
   }
 
   private async sendeVorabPush(): Promise<void> {
@@ -411,6 +519,19 @@ export class GameRoom {
       if (sieg) {
         this.zustand.phase = 'ende';
         this.zustand.sieger = sieg;
+      }
+    } else if (this.zustand.modus === 'mrx') {
+      const mrxSpieler = Object.values(this.zustand.spieler).filter((s) => s.rolle === 'mrx');
+      const alleMrXGefangen = mrxSpieler.length > 0 && mrxSpieler.every((s) => s.gefangen);
+      if (alleMrXGefangen) {
+        this.zustand.phase = 'ende';
+        this.zustand.sieger = 'detektive';
+      } else {
+        const endeZeit = this.zustand.phasenStartZeit + this.zustand.einstellungen.dauerMinuten * 60000;
+        if (this.zustand.jetzt >= endeZeit) {
+          this.zustand.phase = 'ende';
+          this.zustand.sieger = 'mrx';
+        }
       }
     }
   }
@@ -475,6 +596,15 @@ export class GameRoom {
     await this.state.storage.setAlarm(Date.now() + 1000);
   }
 
+  private constantTimeEqual(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+      diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return diff === 0;
+  }
+
   private async verifiziereQrToken(spielerId: string, token: string, secret: string): Promise<boolean> {
     const jetztSlot = Math.floor(Date.now() / 30000);
     for (const slot of [jetztSlot, jetztSlot - 1]) {
@@ -485,7 +615,7 @@ export class GameRoom {
       );
       const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data));
       const hex = Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
-      if (hex === token) return true;
+      if (this.constantTimeEqual(hex, token)) return true;
     }
     return false;
   }

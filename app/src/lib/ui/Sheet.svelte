@@ -105,8 +105,10 @@
     background: rgba(255, 255, 255, 0.06);
     border: none;
     border-radius: 50%;
-    width: 32px;
-    height: 32px;
+    min-width: 44px;
+    min-height: 44px;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;

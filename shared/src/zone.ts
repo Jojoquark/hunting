@@ -168,7 +168,10 @@ export function berechneAktuelleZone(
   const neu = naechsteStufe;
 
   const lat = alt.mittelpunkt.lat + t * (neu.mittelpunkt.lat - alt.mittelpunkt.lat);
-  const lng = alt.mittelpunkt.lng + t * (neu.mittelpunkt.lng - alt.mittelpunkt.lng);
+  const dLngRaw = neu.mittelpunkt.lng - alt.mittelpunkt.lng;
+  const dLng = ((((dLngRaw + 180) % 360) + 360) % 360) - 180;
+  let lng = alt.mittelpunkt.lng + t * dLng;
+  lng = ((((lng + 180) % 360) + 360) % 360) - 180;
   const radius = alt.radiusMeter + t * (neu.radiusMeter - alt.radiusMeter);
 
   return {
