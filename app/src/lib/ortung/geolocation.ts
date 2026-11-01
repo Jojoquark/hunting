@@ -5,8 +5,10 @@
  *     - Sofort bei Bewegung > 10 m
  *     - Sonst alle 15 s Lebenszeichen
  *     - Außerhalb der Zone sofort und alle 5 s
- * - Screen Wake Lock API mit automatischem Wiederaufbau nach Tab-Wechsel
+ * - Screen Wake Lock & iOS Silent Video Loop via Wachhalter
  */
+
+import { wachhalter } from './wachhalter';
 
 export interface GeoPosition {
   lat: number;
@@ -29,23 +31,12 @@ export class GeoTracker {
   public istAktiv = false;
   public fehler: string | null = null;
   public ausserhalbZone = false;
-  public wakeLockSentinel: any = null;
-  public wakeLockUnterstuetzt = false;
-  public wakeLockAktiv = false;
-  public wakeLockErwuenscht = false;
   public kompassRichtung: number | null = null;
 
   private callbacks: Set<GeoPositionsCallback> = new Set();
 
   constructor() {
     if (typeof window !== 'undefined') {
-      this.wakeLockUnterstuetzt = 'wakeLock' in navigator;
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && this.wakeLockErwuenscht && !this.wakeLockAktiv) {
-          this.aktiviereWakeLock().catch(() => {});
-        }
-      });
-
       window.addEventListener('deviceorientation', (ev: DeviceOrientationEvent) => {
         let heading: number | null = null;
         if ('webkitCompassHeading' in ev && typeof (ev as any).webkitCompassHeading === 'number') {
@@ -61,7 +52,7 @@ export class GeoTracker {
   }
 
   /**
-   * Startet die kontinuierliche GPS-Ortung
+   * Startet die kontinuierliche GPS-Ortung und aktiviert den Wachhalter
    */
   public starten(): void {
     if (this.istAktiv || typeof window === 'undefined') return;
@@ -73,6 +64,9 @@ export class GeoTracker {
 
     this.istAktiv = true;
     this.fehler = null;
+
+    // Wachhalter (Screen Wake Lock & iOS Silent Video Loop) sofort aktivieren
+    wachhalter.aktivieren().catch(() => {});
 
     const options: PositionOptions = {
       enableHighAccuracy: true,
@@ -93,7 +87,7 @@ export class GeoTracker {
   }
 
   /**
-   * Stoppt die Ortung und gibt Ressourcen frei
+   * Stoppt die Ortung und gibt Ressourcen frei (inkl. Wachhalter)
    */
   public stoppen(): void {
     if (this.watchId !== null) {
@@ -105,7 +99,7 @@ export class GeoTracker {
       this.timerIntervall = null;
     }
     this.istAktiv = false;
-    this.deaktiviereWakeLock().catch(() => {});
+    wachhalter.deaktivieren().catch(() => {});
   }
 
   private verarbeitePosition(raw: GeolocationPosition): void {
@@ -228,44 +222,30 @@ export class GeoTracker {
     return this.letztePosition;
   }
 
-  // --- Screen Wake Lock API ---
+  // --- Screen Wake Lock & Wachhalter Delegation (100% abwärtskompatibel) ---
+
+  public get wakeLockAktiv(): boolean {
+    return wachhalter.istAktiv;
+  }
+
+  public get wakeLockUnterstuetzt(): boolean {
+    return wachhalter.wakeLockUnterstuetzt;
+  }
+
+  public get wakeLockErwuenscht(): boolean {
+    return wachhalter.istAktiv;
+  }
 
   public async aktiviereWakeLock(): Promise<boolean> {
-    this.wakeLockErwuenscht = true;
-    if (!this.wakeLockUnterstuetzt) return false;
-    try {
-      this.wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
-      this.wakeLockAktiv = true;
-      this.wakeLockSentinel.addEventListener('release', () => {
-        this.wakeLockSentinel = null;
-        this.wakeLockAktiv = false;
-      });
-      return true;
-    } catch (err) {
-      console.warn('[HUNTING Geo] Wake Lock konnte nicht aktiviert werden:', err);
-      this.wakeLockAktiv = false;
-      return false;
-    }
+    return await wachhalter.aktivieren();
   }
 
   public async deaktiviereWakeLock(): Promise<void> {
-    this.wakeLockErwuenscht = false;
-    if (this.wakeLockSentinel) {
-      try {
-        await this.wakeLockSentinel.release();
-      } catch (e) {}
-      this.wakeLockSentinel = null;
-    }
-    this.wakeLockAktiv = false;
+    await wachhalter.deaktivieren();
   }
 
   public async toggleWakeLock(): Promise<boolean> {
-    if (this.wakeLockAktiv) {
-      await this.deaktiviereWakeLock();
-      return false;
-    } else {
-      return await this.aktiviereWakeLock();
-    }
+    return await wachhalter.toggle();
   }
 }
 

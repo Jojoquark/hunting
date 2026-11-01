@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import GlasKnopf from '../lib/ui/GlasKnopf.svelte';
   import GlasKapsel from '../lib/ui/GlasKapsel.svelte';
   import Icon from '../lib/ui/Icon.svelte';
@@ -16,6 +17,29 @@
   let codeSheetOffen = $state(false);
   let spielCode = $state('');
   let fehlerText = $state('');
+  let istGitHubPages = $state(false);
+  let istOnline = $state(true);
+
+  onMount(() => {
+    if (typeof window !== 'undefined') {
+      istGitHubPages =
+        window.location.hostname.includes('github.io') ||
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1';
+      istOnline = navigator.onLine;
+
+      const onlineHandler = () => (istOnline = true);
+      const offlineHandler = () => (istOnline = false);
+
+      window.addEventListener('online', onlineHandler);
+      window.addEventListener('offline', offlineHandler);
+
+      return () => {
+        window.removeEventListener('online', onlineHandler);
+        window.removeEventListener('offline', offlineHandler);
+      };
+    }
+  });
 
   function starteBeitritt() {
     const sauber = spielCode.trim().toUpperCase();
@@ -30,12 +54,24 @@
 </script>
 
 <div class="start-screen">
-  <!-- Obere Funktionsleiste -->
+  <!-- Obere Funktionsleiste mit Liquid-Glass Statuskapsel -->
   <header class="start-header">
-    <div class="status-kapsel">
-      <GlasKapsel variante="kapsel">
-        <span class="status-punkt"></span>
-        <span class="status-text">GPS BEREIT</span>
+    <div class="status-kapsel-gruppe">
+      <GlasKapsel variante="kapsel" klasse="header-status-pill">
+        <div class="status-segment">
+          <span class="status-punkt" class:offline={!istOnline}></span>
+          <span class="status-text">{istOnline ? 'GPS BEREIT' : 'OFFLINE'}</span>
+        </div>
+
+        <span class="status-trenner" aria-hidden="true"></span>
+
+        <!-- GitHub Pages & Instant-Onboarding Reassurance Badge -->
+        <div class="status-segment onboarding-badge">
+          <Icon name="globe" size={13} color="var(--tinte-2)" />
+          <span class="onboarding-text">
+            {istGitHubPages ? 'Online-Modus bereit' : 'Sofort im Browser spielbar'}
+          </span>
+        </div>
       </GlasKapsel>
     </div>
 
@@ -49,14 +85,14 @@
     </div>
   </header>
 
-  <!-- Hero-Zentrum: Boldschwarze Ästhetik, kein Farbverlauf auf Text -->
+  <!-- Hero-Zentrum: Boldschwarze Ästhetik, solide Tinte ohne Farbverlauf -->
   <main class="start-main">
     <div class="hero-gruppe">
       <h1 class="hero-titel">HUNTING</h1>
       <p class="hero-untertitel">Das GPS-Echtzeit-Jagdspiel für dein Revier.</p>
     </div>
 
-    <!-- Direkte, unmissverständliche Hauptaktionen -->
+    <!-- Direkte, taktile Hauptaktionen -->
     <div class="start-aktionen">
       <GlasKnopf variante="primaer" groesse="lg" breit={true} onclick={onerstellen}>
         <Icon name="plus" size={22} color="#0a0a0c" />
@@ -70,19 +106,28 @@
     </div>
   </main>
 
-  <!-- Fußzeile mit Installations-Hinweis -->
+  <!-- Fußzeile mit Video-Wachhalter Reassurance & Einrichtungs-Link -->
   <footer class="start-footer">
-    <button class="hilfe-link" onclick={oneinrichtung}>
-      <Icon name="alert-triangle" size={16} color="var(--tinte-2)" />
-      <span>Installations- & Berechtigungs-Check</span>
-    </button>
+    <div class="start-footer-bar">
+      <div class="wachhalter-reassurance">
+        <Icon name="awake" size={14} color="var(--akzent)" />
+        <span class="wachhalter-info-text">Display-Wachhalter aktiv</span>
+      </div>
+
+      <span class="footer-dot-sep">•</span>
+
+      <button class="hilfe-link" onclick={oneinrichtung}>
+        <Icon name="alert-triangle" size={14} color="var(--tinte-2)" />
+        <span>Berechtigungs-Check</span>
+      </button>
+    </div>
   </footer>
 
   <!-- Beitreten-Sheet -->
   <Sheet offen={codeSheetOffen} titel="Spiel beitreten" onclose={() => (codeSheetOffen = false)}>
     <div class="beitritt-formular">
       <p class="anweisung">Gib den 6-stelligen Spielcode des Hosts ein:</p>
-      
+
       <div class="code-eingabe-wrapper">
         <input
           type="text"
@@ -126,6 +171,25 @@
     align-items: center;
     justify-content: space-between;
     width: 100%;
+    gap: 12px;
+  }
+
+  .status-kapsel-gruppe {
+    display: flex;
+    align-items: center;
+  }
+
+  :global(.header-status-pill) {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    padding: 6px 14px !important;
+  }
+
+  .status-segment {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .status-punkt {
@@ -133,7 +197,12 @@
     height: 8px;
     border-radius: 50%;
     background: #00e599;
-    box-shadow: 0 0 8px #00e599;
+    box-shadow: 0 0 8px rgba(0, 229, 153, 0.6);
+  }
+
+  .status-punkt.offline {
+    background: #ff3b5c;
+    box-shadow: 0 0 8px rgba(255, 59, 92, 0.6);
   }
 
   .status-text {
@@ -141,6 +210,24 @@
     font-weight: 700;
     letter-spacing: 0.08em;
     color: var(--tinte);
+  }
+
+  .status-trenner {
+    width: 1px;
+    height: 14px;
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .onboarding-badge {
+    gap: 6px;
+  }
+
+  .onboarding-text {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--tinte-2);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
   }
 
   .header-aktionen {
@@ -181,7 +268,6 @@
     margin-bottom: 48px;
   }
 
-  /* Solid Ink Headline: max 2 Zeilen via clamp() */
   .hero-titel {
     font-family: var(--font-headline);
     font-size: clamp(3rem, 11vw, 5.2rem);
@@ -213,24 +299,49 @@
     padding-top: 16px;
   }
 
+  .start-footer-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--flaeche);
+    border: 1px solid var(--flaeche-rand);
+    border-radius: var(--radius-kapsel);
+    padding: 6px 14px;
+  }
+
+  .wachhalter-reassurance {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: var(--tinte-2);
+  }
+
+  .wachhalter-info-text {
+    font-weight: 500;
+  }
+
+  .footer-dot-sep {
+    color: var(--tinte-3);
+    font-size: 0.8rem;
+  }
+
   .hilfe-link {
     background: transparent;
     border: none;
     color: var(--tinte-2);
-    font-size: 0.875rem;
+    font-size: 0.75rem;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     cursor: pointer;
-    padding: 8px 12px;
-    border-radius: var(--radius-kapsel);
+    padding: 2px 4px;
     transition: color var(--zeit-schnell) ease-out;
   }
   .hilfe-link:hover {
     color: var(--tinte);
   }
 
-  /* Formular im Sheet */
   .beitritt-formular {
     display: flex;
     flex-direction: column;

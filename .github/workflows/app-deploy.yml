@@ -2,7 +2,7 @@ name: Deploy PWA to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - 'app/**'
       - 'shared/**'
@@ -44,10 +44,8 @@ jobs:
       - name: Abhaengigkeiten installieren
         run: pnpm install --frozen-lockfile
 
-      - name: Svelte PWA bauen (fuer jojoquark.github.io/hunting)
-        run: pnpm --filter app build
-        env:
-          BASE_URL: '/hunting/'
+      - name: Svelte PWA bauen
+        run: pnpm --filter hunting-app build
 
       - name: Pages konfigurieren
         uses: actions/configure-pages@v5

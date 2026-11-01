@@ -4,6 +4,7 @@
   import { spielNetz } from '../lib/netz/socket';
   import { geoTracker, type GeoPosition } from '../lib/ortung/geolocation';
   import { klang } from '../lib/klang/sound';
+  import Icon from '../lib/ui/Icon.svelte';
 
   // Props über Svelte 5 $props()
   let {
@@ -45,12 +46,23 @@
   let chatKanal = $state<'alle' | 'team' | 'zuschauer'>('team');
   let chatEingabe = $state('');
   let chatNachrichten = $state<Array<{ von: string; text: string; kanal: string; zeit: number }>>([]);
-  
+
+  // Display Dauer-Aktiv & Video-Wachhalter Status
+  let displayWachAktiv = $state(true);
+  let toastMeldung = $state<string | null>(null);
+  let toastTimer: number | null = null;
+  let videoElement: HTMLVideoElement | null = null;
+
   // Ticket-Formular für Mr. X
   let gewaehltesTicket = $state<'bus' | 'tram' | 'ubahn' | 'sbahn' | 'zug' | 'faehre' | 'black' | 'doppel'>('bus');
   let ticketLinie = $state('');
   let ticketHaltestelle = $state('');
-  let haltestellenVorschlaege = $state<string[]>(['Hauptbahnhof (Gleis 1-4)', 'Zentrum / Rathaus', 'Universitätsplatz', 'Stadtpark Nord']);
+  let haltestellenVorschlaege = $state<string[]>([
+    'Hauptbahnhof (Gleis 1-4)',
+    'Zentrum / Rathaus',
+    'Universitätsplatz',
+    'Stadtpark Nord',
+  ]);
 
   // QR-Fang Formular & Code
   let qrEingabeZielId = $state('');
@@ -90,9 +102,78 @@
   let istMrX = $derived(rolle === 'mrx');
   let kannFangen = $derived(rolle === 'seeker' || rolle === 'zombie' || rolle === 'detektiv');
 
+  /**
+   * Video-Wachhalter Engine:
+   * Hält iOS Safari und Android PWAs durch einen stummen 1-Frame Inline-Videoloop
+   * unerbittlich wach, selbst wenn das Betriebssystem aggressiv in Standby schalten will.
+   */
+  function initialisiereVideoWachhalter() {
+    if (typeof document === 'undefined') return;
+    try {
+      if (!videoElement) {
+        videoElement = document.createElement('video');
+        videoElement.setAttribute('muted', '');
+        videoElement.setAttribute('playsinline', '');
+        videoElement.setAttribute('webkit-playsinline', '');
+        videoElement.setAttribute('loop', '');
+        videoElement.muted = true;
+        videoElement.autoplay = true;
+        videoElement.style.position = 'fixed';
+        videoElement.style.opacity = '0.0001';
+        videoElement.style.pointerEvents = 'none';
+        videoElement.style.width = '1px';
+        videoElement.style.height = '1px';
+        videoElement.style.top = '-100px';
+        videoElement.style.left = '-100px';
+        videoElement.style.zIndex = '-9999';
+        // 1-Frame stummes MP4 Video
+        videoElement.src =
+          'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAAAhmcmVlAAAABG1kYXQAAAAIZnJlZQAAAApmdHlwbXA0MgAAACBtZGF0';
+        document.body.appendChild(videoElement);
+      }
+      videoElement.play().catch(() => {});
+    } catch (e) {
+      console.warn('[HUNTING] Video-Wachhalter Fallback:', e);
+    }
+  }
+
+  function stoppeVideoWachhalter() {
+    if (videoElement) {
+      try {
+        videoElement.pause();
+      } catch (e) {}
+    }
+  }
+
+  async function toggleDisplayWachhalter() {
+    klang.klick();
+    if (displayWachAktiv) {
+      displayWachAktiv = false;
+      await geoTracker.deaktiviereWakeLock();
+      stoppeVideoWachhalter();
+      zeigeToast('Display-Wachhalter pausiert – Display schaltet normal ab');
+    } else {
+      displayWachAktiv = true;
+      await geoTracker.aktiviereWakeLock();
+      initialisiereVideoWachhalter();
+      zeigeToast('✓ Display: Dauer-Aktiv (Video-Wachhalter aktiv)');
+    }
+  }
+
+  function zeigeToast(meldung: string) {
+    toastMeldung = meldung;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+      toastMeldung = null;
+    }, 2800);
+  }
+
   onMount(() => {
-    // 1. Geolocation starten
+    // 1. Geolocation & Video-Wachhalter starten
     geoTracker.starten();
+    geoTracker.aktiviereWakeLock().catch(() => {});
+    initialisiereVideoWachhalter();
+
     const unsubGeo = geoTracker.abonnieren((pos: GeoPosition) => {
       spielNetz.sendOrt({
         lat: pos.lat,
@@ -144,6 +225,12 @@
       unsubGeo();
       unsubNetz();
       if (timerIntervall) clearInterval(timerIntervall);
+      if (toastTimer) clearTimeout(toastTimer);
+      stoppeVideoWachhalter();
+      if (videoElement && videoElement.parentNode) {
+        videoElement.parentNode.removeChild(videoElement);
+        videoElement = null;
+      }
     };
   });
 
@@ -192,34 +279,61 @@
 </script>
 
 <div class="hud-overlay">
-  <!-- 1. OBERE SCHWEBENDE GLASKAPSEL -->
-  <header class="glas-container kopf-leiste">
-    <div class="kapsel-segment phase">
-      <span class="puls-punkt" class:aktiv={spielZustand.phase === 'jagd'}></span>
-      <span class="phase-text">{de.hud.phase[spielZustand.phase as keyof typeof de.hud.phase] || 'Jagd'}</span>
-    </div>
+  <!-- 1. OBERER SCHWEBENDER HUD-BEREICH -->
+  <div class="oberer-hud-block">
+    <header class="glas-container kopf-leiste">
+      <div class="kapsel-segment phase">
+        <span class="puls-punkt" class:aktiv={spielZustand.phase === 'jagd'}></span>
+        <span class="phase-text">{de.hud.phase[spielZustand.phase as keyof typeof de.hud.phase] || 'Jagd'}</span>
+      </div>
 
-    <div class="kapsel-segment timer-zentral">
-      <span class="label">{de.hud.timer.restzeit}</span>
-      <span class="zeit">{restzeitText}</span>
-    </div>
+      <div class="kapsel-segment timer-zentral">
+        <span class="label">{de.hud.timer.restzeit}</span>
+        <span class="zeit">{restzeitText}</span>
+      </div>
 
-    <div class="kapsel-segment ping-timer">
-      <span class="label">{de.hud.timer.naechsterPing}</span>
-      <span class="zeit">{naechsterPingText}</span>
-    </div>
+      <div class="kapsel-segment ping-timer">
+        <span class="label">{de.hud.timer.naechsterPing}</span>
+        <span class="zeit">{naechsterPingText}</span>
+      </div>
 
-    <button
-      type="button"
-      class="icon-knopf"
-      title={geoTracker.wakeLockAktiv ? de.ortung.wakeLockAktiv : de.ortung.wakeLockInaktiv}
-      onclick={() => geoTracker.toggleWakeLock()}
-    >
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-      </svg>
-    </button>
-  </header>
+      <!-- Schnelltaste für Wake-Lock Toggle im Header -->
+      <button
+        type="button"
+        class="icon-knopf"
+        class:aktiv={displayWachAktiv}
+        title={displayWachAktiv ? 'Display: Dauer-Aktiv (Video-Wachhalter)' : 'Display: Normal'}
+        onclick={toggleDisplayWachhalter}
+        aria-label="Display-Wachhalter umschalten"
+      >
+        <Icon name={displayWachAktiv ? 'awake' : 'eye-off'} size={18} color={displayWachAktiv ? '#00e599' : '#a3a3ad'} />
+      </button>
+    </header>
+
+    <!-- SCHWEBENDER WACHHALTER-STATUS-INDICATOR (APPLE LIQUID GLASS) -->
+    <div class="wachhalter-schwebe-leiste">
+      <button
+        type="button"
+        class="wachhalter-pill"
+        class:inaktiv={!displayWachAktiv}
+        onclick={toggleDisplayWachhalter}
+        title="Tippen zum Bestätigen oder Umschalten des Display-Dauerbetriebs"
+      >
+        <span class="wachhalter-punkt" class:aktiv={displayWachAktiv}></span>
+        <Icon name={displayWachAktiv ? 'eye' : 'eye-off'} size={14} color={displayWachAktiv ? '#00e599' : 'var(--tinte-3)'} />
+        <span class="wachhalter-text">
+          Display: <strong class="wachhalter-status">{displayWachAktiv ? 'Dauer-Aktiv' : 'Normal'}</strong>
+          <span class="wachhalter-sub">(Video-Wachhalter)</span>
+        </span>
+      </button>
+
+      {#if toastMeldung}
+        <div class="wachhalter-toast" role="status">
+          <span>{toastMeldung}</span>
+        </div>
+      {/if}
+    </div>
+  </div>
 
   <!-- 2. WARNUNGEN (ZONENVERLASS / FUNKLOCH / GEGNER NÄHE) -->
   {#if spielZustand.ausserhalbZone}
@@ -333,7 +447,7 @@
     </button>
   </footer>
 
-  <!-- 5. SHEETS (FÄHIGKEITEN / CHAT / TICKET) -->
+  <!-- 5. MODAL SHEETS -->
   {#if offenesSheet !== 'keins'}
     <div
       class="sheet-backdrop"
@@ -548,13 +662,22 @@
     color: #f2f2ee;
   }
 
-  /* 1. KOPF-KAPSEL */
+  /* 1. OBERER HUD-BLOCK */
+  .oberer-hud-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    width: 100%;
+  }
+
   .kopf-leiste {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 10px 18px;
-    margin-top: 8px;
+    width: 100%;
   }
 
   .kapsel-segment {
@@ -606,9 +729,102 @@
     padding: 6px;
     cursor: pointer;
     border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform var(--zeit-schnell) var(--feder-aus), color var(--zeit-schnell) ease-out;
   }
   .icon-knopf:active {
-    transform: scale(0.95);
+    transform: scale(0.92);
+  }
+  .icon-knopf.aktiv {
+    color: #00e599;
+  }
+
+  /* SCHWEBENDE WACHHALTER-PILL (LIQUID GLASS) */
+  .wachhalter-schwebe-leiste {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    pointer-events: auto;
+  }
+
+  .wachhalter-pill {
+    background: rgba(20, 20, 24, 0.72);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08), 0 8px 24px rgba(0, 0, 0, 0.35);
+    border-radius: var(--radius-kapsel);
+    padding: 6px 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--tinte);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: transform var(--zeit-schnell) var(--feder-aus), background-color var(--zeit-schnell) ease-out, border-color var(--zeit-schnell) ease-out;
+    user-select: none;
+  }
+
+  .wachhalter-pill:active {
+    transform: scale(0.96);
+  }
+
+  .wachhalter-pill.inaktiv {
+    opacity: 0.75;
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .wachhalter-punkt {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #6e6e78;
+    transition: background-color var(--zeit-schnell) ease-out, box-shadow var(--zeit-schnell) ease-out;
+  }
+
+  .wachhalter-punkt.aktiv {
+    background: #00e599;
+    box-shadow: 0 0 8px rgba(0, 229, 153, 0.6);
+  }
+
+  .wachhalter-status {
+    color: #f2f2ee;
+    font-weight: 700;
+  }
+
+  .wachhalter-sub {
+    color: #a3a3ad;
+    font-size: 0.7rem;
+    font-weight: 400;
+    margin-left: 2px;
+  }
+
+  .wachhalter-toast {
+    background: rgba(14, 14, 18, 0.88);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+    border-radius: var(--radius-kapsel);
+    padding: 5px 12px;
+    color: #00e599;
+    font-size: 0.72rem;
+    font-weight: 600;
+    animation: toastErscheinen 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes toastErscheinen {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
   }
 
   /* 2. WARNUNGEN */
@@ -931,24 +1147,25 @@
 
   .ticket-raster {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 8px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
   }
 
   .ticket-option {
-    background: #1a1a22;
+    background: #191920;
     border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 10px 4px;
     color: #f2f2ee;
-    border-radius: 12px;
-    padding: 12px;
-    text-align: center;
+    font-size: 0.8rem;
     cursor: pointer;
   }
 
   .ticket-option.gewaehlt {
-    border-color: #ff5c00;
-    background: rgba(255, 92, 0, 0.15);
+    background: #ff5c00;
+    color: #000;
+    font-weight: 700;
   }
 
   .ticket-eingaben {
@@ -965,64 +1182,56 @@
   }
 
   .vorschlag-item {
-    background: #181820;
-    color: #a3a3ad;
+    background: #1a1a22;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
+    color: #a3a3ad;
     padding: 4px 8px;
     font-size: 0.75rem;
     cursor: pointer;
   }
 
-  /* 5. QR-SHEET & STYLES */
   .qr-sheet-inhalt {
     display: flex;
     flex-direction: column;
     gap: 16px;
-    padding: 12px 0;
   }
-  .qr-abschnitt h4 {
-    margin: 0 0 6px 0;
-    font-size: 1rem;
-    color: #f2f2ee;
-  }
-  .qr-hinweis {
-    font-size: 0.85rem;
-    color: #a3a3ad;
-    margin: 0 0 12px 0;
-  }
+
   .qr-form {
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
+
   .qr-token-box {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: #121216;
+    background: #0f0f13;
     border: 2px dashed #ff5c00;
     border-radius: 16px;
     padding: 20px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
     gap: 8px;
   }
+
   .qr-spieler-id {
-    font-size: 0.85rem;
     color: #a3a3ad;
-    text-transform: uppercase;
+    font-size: 0.85rem;
   }
+
   .qr-code-display {
     font-family: inherit;
-    font-size: 2rem;
+    font-variant-numeric: tabular-nums;
+    font-size: 2.2rem;
     font-weight: 800;
-    letter-spacing: 0.15em;
-    color: #ff5c00;
+    letter-spacing: 0.1em;
+    color: #00e599;
   }
+
   .qr-status {
+    color: #ff3b5c;
     font-size: 0.85rem;
-    color: #ff5c00;
+    margin-top: 6px;
     text-align: center;
-    margin-top: 8px;
   }
 </style>
