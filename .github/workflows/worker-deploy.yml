@@ -13,27 +13,40 @@ jobs:
   deploy-worker:
     name: Deploy Worker
     runs-on: ubuntu-latest
-    if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
 
     steps:
+      - name: Pruefe Cloudflare Secret
+        id: check-secret
+        run: |
+          if [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]; then
+            echo "has_token=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_token=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Repository auschecken
+        if: steps.check-secret.outputs.has_token == 'true'
         uses: actions/checkout@v4
 
       - name: pnpm einrichten
+        if: steps.check-secret.outputs.has_token == 'true'
         uses: pnpm/action-setup@v3
         with:
           version: 9
 
       - name: Node.js 20 einrichten
+        if: steps.check-secret.outputs.has_token == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'pnpm'
 
       - name: Abhaengigkeiten installieren
+        if: steps.check-secret.outputs.has_token == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Cloudflare Worker deployen
+        if: steps.check-secret.outputs.has_token == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
