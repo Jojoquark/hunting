@@ -1,0 +1,22 @@
+name = "hunting-backend"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "GAME_ROOM", class_name = "GameRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GameRoom"]
+
+[vars]
+ENVIRONMENT = "production"
+
+# Folgende Secrets werden über `wrangler secret put` gesetzt:
+# VAPID_PUBLIC
+# VAPID_PRIVATE
+# FIREBASE_SA
+# QR_SECRET

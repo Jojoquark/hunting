@@ -1,0 +1,54 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Unit & E2E Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: pnpm einrichten
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Node.js 20 einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Abhaengigkeiten installieren
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript Typ-Pruefung
+        run: pnpm -r exec tsc --noEmit
+
+      - name: Vitest Unit & Integrationstests ausfuehren
+        run: pnpm vitest run --coverage
+
+      - name: Playwright Browser installieren
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright E2E Tests ausfuehren
+        run: pnpm exec playwright test --project="Desktop Chrome"
+        env:
+          CI: true
+
+      - name: Test-Report als Artefakt hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            coverage/
+            playwright-report/
+          retention-days: 14

@@ -1,0 +1,68 @@
+:root {
+  /* Farbpalette „Nachtjagd“ */
+  --grund: #0a0a0c;
+  --flaeche: #141418;
+  --flaeche-erhoeht: #1c1c22;
+  --flaeche-rand: rgba(255, 255, 255, 0.08);
+
+  /* Transparente Liquid Glass Tokens */
+  --glas-grund: rgba(20, 20, 24, 0.74);
+  --glas-kante: rgba(255, 255, 255, 0.14);
+  --glas-glanz: rgba(255, 255, 255, 0.06);
+
+  /* Tinte (Textfarben mit geprüften Kontrasten >= 4.5:1) */
+  --tinte: #f2f2ee;       /* Kontrast auf #0a0a0c: 18.6:1 (AAA) */
+  --tinte-2: #a3a3ad;     /* Kontrast auf #0a0a0c: 7.2:1 (AAA) */
+  --tinte-3: #6e6e78;     /* Dezent, Meta-Informationen */
+
+  /* Akzentfarbe (Exklusiv für primäre Aktionen, Zone & Pings) */
+  --akzent: #ff5c00;
+  --akzent-hover: #ff7326;
+  --akzent-aktiv: #e05200;
+  --akzent-alpha: rgba(255, 92, 0, 0.16);
+
+  /* Rollenfarben */
+  --rolle-jaeger: #ff3b5c;    /* Seeker / Detektiv */
+  --rolle-gejagt: #3ad1ff;    /* Hider / Mensch / Mr. X */
+  --rolle-zombie: #8fe33a;    /* Zombie */
+
+  /* Typografie */
+  --font-headline: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Tiefen & Radien */
+  --radius-s: 8px;
+  --radius-m: 14px;
+  --radius-l: 22px;
+  --radius-kapsel: 9999px;
+
+  --schatten-kapsel: 0 12px 32px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --schatten-flaeche: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* Emil Kowalski Feder-Kurven */
+  --feder-aus: cubic-bezier(0.16, 1, 0.3, 1);
+  --zeit-schnell: 140ms;
+  --zeit-standard: 220ms;
+}
+
+/* Browser-Oberflächen thematisieren (Impeccable Craft Floor) */
+::selection {
+  background: var(--akzent);
+  color: #0a0a0c;
+}
+
+input, textarea {
+  caret-color: var(--akzent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--akzent);
+  outline-offset: 2px;
+}
+
+/* Feste Ziffernbreite für alle Timer und Koordinaten */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}

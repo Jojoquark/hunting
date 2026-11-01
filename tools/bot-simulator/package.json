@@ -1,0 +1,22 @@
+{
+  "name": "@hunting/bot-simulator",
+  "version": "1.0.0",
+  "description": "Headless Bot-Simulator fuer Hunting GPS-Fangspiele",
+  "type": "module",
+  "main": "src/cli.ts",
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "simulate:classic": "tsx src/cli.ts --mode klassisch --speed 10",
+    "simulate:zombie": "tsx src/cli.ts --mode zombie --speed 10",
+    "simulate:mrx": "tsx src/cli.ts --mode mrx --speed 10"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
+  }
+}

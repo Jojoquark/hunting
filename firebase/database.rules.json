@@ -1,0 +1,23 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "bestenliste": {
+      ".read": "auth != null",
+      ".write": false,
+      "$zeitraum": {
+        ".indexOn": ["punkte", "faenge", "ueberlebtSekunden"],
+        "$uid": {
+          ".validate": "newData.hasChildren(['punkte', 'faenge', 'ueberlebtSekunden', 'spieleGesamt', 'aktualisiertAm']) && newData.child('punkte').isNumber() && newData.child('faenge').isNumber() && newData.child('ueberlebtSekunden').isNumber() && newData.child('spieleGesamt').isNumber() && newData.child('aktualisiertAm').isNumber()"
+        }
+      }
+    },
+    "statistik": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": false,
+        ".validate": "newData.hasChildren(['faenge', 'ueberlebtSekunden', 'gelaufeneMeter', 'spieleGesamt']) && newData.child('faenge').isNumber() && newData.child('ueberlebtSekunden').isNumber() && newData.child('gelaufeneMeter').isNumber() && newData.child('spieleGesamt').isNumber()"
+      }
+    }
+  }
+}
