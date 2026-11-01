@@ -1,8 +1,30 @@
 import { SimulationsEngine, SimulationsKonfiguration } from './engine.js';
 import { Modus } from './types.js';
 
+function printHelpAndExit() {
+  console.log(`========================================
+ HUNTING – Headless Bot-Simulator
+========================================
+Verwendung:
+  pnpm simulator [Optionen]
+
+Optionen:
+  --mode <klassisch|zombie|mrx>   Spielmodus (Standard: klassisch)
+  --speed <Zahl>                  Zeitraffer-Faktor (Standard: 10)
+  --hiders <Zahl>                 Anzahl Gejagte (Standard: 5)
+  --seekers <Zahl>                Anzahl Jaeger (Standard: 1)
+  --server <url>                  WebSocket Server URL (Standard: ws://localhost:8787)
+  --duration <Sekunden>           Maximaldauer der Simulation (Standard: 300)
+  --help, -h                      Hilfe anzeigen
+`);
+  process.exit(0);
+}
+
 function parseArgs(): SimulationsKonfiguration {
   const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    printHelpAndExit();
+  }
   let modus: Modus = 'klassisch';
   let speed = 10;
   let hiders = 5;

@@ -6,7 +6,9 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "pnpm -r --filter @hunting/shared typecheck"
+    "typecheck": "pnpm -r --filter @hunting/shared typecheck",
+    "build": "pnpm -r --filter hunting-app build",
+    "simulator": "pnpm --filter @hunting/bot-simulator start"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

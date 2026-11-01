@@ -27,11 +27,22 @@
   let karte: maplibregl.Map | null = null;
   let mitteMarker: maplibregl.Marker | null = null;
 
-  let zonenMitte = $state<[number, number]>(initialMitte);
-  let radius = $state(initialRadius);
-  let stufen = $state(initialStufen);
-  let faktor = $state(initialFaktor);
+  let zonenMitte = $state<[number, number]>([13.405, 52.52]);
+  let radius = $state(1000);
+  let stufen = $state(4);
+  let faktor = $state(0.65);
   let aktiveVorschauStufe = $state(1);
+
+  let initialisiert = false;
+  $effect(() => {
+    if (!initialisiert) {
+      zonenMitte = initialMitte;
+      radius = initialRadius;
+      stufen = initialStufen;
+      faktor = initialFaktor;
+      initialisiert = true;
+    }
+  });
 
   function erzeugeKreisGeoJSON(mitte: [number, number], radiusMeter: number) {
     const punkte = 64;

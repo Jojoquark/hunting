@@ -38,7 +38,14 @@
     onzoneneditor
   }: Props = $props();
 
-  let spieler = $state<LobbySpieler[]>(spielerListe);
+  let spieler = $state<LobbySpieler[]>([]);
+  let initialisiert = false;
+  $effect(() => {
+    if (!initialisiert) {
+      spieler = [...spielerListe];
+      initialisiert = true;
+    }
+  });
   let modus = $state<'klassisch' | 'zombie' | 'mrx'>('klassisch');
   let settingsSheetOffen = $state(false);
   let qrSheetOffen = $state(false);
