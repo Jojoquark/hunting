@@ -3,9 +3,11 @@
   import Einrichtung from './screens/Einrichtung.svelte';
   import Lobby from './screens/Lobby.svelte';
   import ZonenEditor from './screens/ZonenEditor.svelte';
-  import GlasKnopf from './lib/ui/GlasKnopf.svelte';
-  import GlasKapsel from './lib/ui/GlasKapsel.svelte';
-  import Icon from './lib/ui/Icon.svelte';
+  import Spiel from './screens/Spiel.svelte';
+  import Gefangen from './screens/Gefangen.svelte';
+  import Ende from './screens/Ende.svelte';
+  import Replay from './screens/Replay.svelte';
+  import Profil from './screens/Profil.svelte';
 
   // Typdefinition für die Spielphasen / Bildschirme
   type Bildschirm =
@@ -27,6 +29,16 @@
   let spielCode = $state('HNT-782');
   let istHost = $state(true);
   let spitzname = $state('Jäger Eins');
+  let aktiverModus = $state('klassisch');
+  let aktiveRolle = $state('seeker');
+  let spielerId = $state('sp-' + Math.random().toString(36).substring(2, 6));
+  let letzterSieger = $state('seeker');
+
+  function handleSpielStart(daten?: { modus?: string; rolle?: string }) {
+    if (daten?.modus) aktiverModus = daten.modus;
+    if (daten?.rolle) aktiveRolle = daten.rolle;
+    navigiereZu('spiel');
+  }
 
   // Zonen-Zustand
   let zonenDaten = $state({
@@ -82,7 +94,7 @@
     <Lobby
       {spielCode}
       {istHost}
-      onstart={() => navigiereZu('spiel')}
+      onstart={handleSpielStart}
       onverlassen={() => navigiereZu('start')}
       onzoneneditor={() => navigiereZu('zoneneditor')}
     />
@@ -97,80 +109,47 @@
       onabbrechen={geheZurueck}
     />
 
-  <!-- Integrierte Fallback- & Entwicklungsansichten für Spezialbildschirme -->
   {:else if aktiverBildschirm === 'spiel'}
-    <div class="dummy-screen">
-      <div class="screen-box">
-        <h2 class="screen-titel">JAGD LÄUFT</h2>
-        <p class="screen-info">Das Spiel läuft aktiv. Das HUD wird von der Game-Engine gesteuert.</p>
-        <div class="demo-aktionen">
-          <GlasKnopf variante="gefahr" groesse="md" onclick={() => navigiereZu('gefangen')}>
-            <span>Gefangen-Moment simulieren</span>
-          </GlasKnopf>
-          <GlasKnopf variante="sekundaer" groesse="md" onclick={() => navigiereZu('ende')}>
-            <span>Spiel beenden</span>
-          </GlasKnopf>
-        </div>
-      </div>
-    </div>
+    <Spiel
+      {spielerId}
+      {spielCode}
+      rolle={aktiveRolle}
+      modus={aktiverModus}
+      onGefangen={() => navigiereZu('gefangen')}
+      onSpielEnde={(sieger) => {
+        letzterSieger = sieger;
+        navigiereZu('ende');
+      }}
+    />
 
   {:else if aktiverBildschirm === 'gefangen'}
-    <div class="dummy-screen voll-gefahr">
-      <div class="screen-box">
-        <Icon name="crosshair" size={48} color="var(--rolle-jaeger)" />
-        <h1 class="alarm-titel">DU WURDEST GEFANGEN!</h1>
-        <p class="screen-info">Du wechselst nun in den Zuschauer- oder Zombie-Modus.</p>
-        <GlasKnopf variante="sekundaer" groesse="lg" onclick={() => navigiereZu('spiel')}>
-          <span>Als Zuschauer zusehen</span>
-        </GlasKnopf>
-      </div>
-    </div>
+    <Gefangen
+      modus={aktiverModus}
+      onWechselZuZuschauer={() => navigiereZu('spiel')}
+      onWechselZuZombie={() => {
+        aktiveRolle = 'zombie';
+        navigiereZu('spiel');
+      }}
+    />
 
   {:else if aktiverBildschirm === 'ende'}
-    <div class="dummy-screen">
-      <div class="screen-box">
-        <h1 class="sieger-titel">JAGD BEENDET</h1>
-        <p class="screen-info">Team Jäger hat alle Gejagten vor Zeitablauf aufgespürt.</p>
-        <div class="demo-aktionen">
-          <GlasKnopf variante="primaer" groesse="lg" onclick={() => navigiereZu('replay')}>
-            <Icon name="radar" size={20} color="#0a0a0c" />
-            <span>Replay ansehen</span>
-          </GlasKnopf>
-          <GlasKnopf variante="sekundaer" groesse="md" onclick={() => navigiereZu('lobby')}>
-            <span>Revanche in Lobby</span>
-          </GlasKnopf>
-          <GlasKnopf variante="flach" groesse="sm" onclick={() => navigiereZu('start')}>
-            <span>Hauptmenü</span>
-          </GlasKnopf>
-        </div>
-      </div>
-    </div>
+    <Ende
+      sieger={letzterSieger}
+      onReplay={() => navigiereZu('replay')}
+      onRevanche={() => navigiereZu('lobby')}
+      onLobby={() => navigiereZu('lobby')}
+    />
 
   {:else if aktiverBildschirm === 'replay'}
-    <div class="dummy-screen">
-      <div class="screen-box">
-        <h2 class="screen-titel">SPIEL-REPLAY</h2>
-        <p class="screen-info">Interaktive Zeitleiste und Bewegungspfade aller Spieler.</p>
-        <GlasKnopf variante="sekundaer" groesse="md" onclick={() => navigiereZu('ende')}>
-          <Icon name="arrow-right" size={18} />
-          <span>Zurück zur Auswertung</span>
-        </GlasKnopf>
-      </div>
-    </div>
+    <Replay
+      onSchliessen={() => navigiereZu('ende')}
+    />
 
   {:else if aktiverBildschirm === 'profil'}
-    <div class="dummy-screen">
-      <div class="screen-box">
-        <div class="profil-icon">
-          <Icon name="user" size={32} />
-        </div>
-        <h2 class="screen-titel">{spitzname}</h2>
-        <p class="screen-info">Statistiken: 14 Jagden, 38 km gelaufen, 8 Überlebenssiege.</p>
-        <GlasKnopf variante="sekundaer" groesse="md" onclick={geheZurueck}>
-          <span>Zurück</span>
-        </GlasKnopf>
-      </div>
-    </div>
+    <Profil
+      spitzname={spitzname}
+      onZurueck={geheZurueck}
+    />
   {/if}
 </div>
 
@@ -182,77 +161,5 @@
     background: var(--grund);
     color: var(--tinte);
     overflow: hidden;
-  }
-
-  /* Platzhalter-Styling für nachfolgende Module */
-  .dummy-screen {
-    width: 100%;
-    height: 100dvh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: var(--grund);
-    text-align: center;
-  }
-
-  .dummy-screen.voll-gefahr {
-    background: radial-gradient(circle at center, rgba(255, 59, 92, 0.25) 0%, var(--grund) 80%);
-  }
-
-  .screen-box {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 16px;
-    max-width: 380px;
-  }
-
-  .screen-titel {
-    font-family: var(--font-headline);
-    font-size: 1.75rem;
-    font-weight: 700;
-    color: var(--tinte);
-  }
-
-  .alarm-titel {
-    font-family: var(--font-headline);
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--rolle-jaeger);
-    letter-spacing: -0.02em;
-  }
-
-  .sieger-titel {
-    font-family: var(--font-headline);
-    font-size: 2.2rem;
-    font-weight: 700;
-    color: var(--akzent);
-  }
-
-  .screen-info {
-    font-size: 0.9375rem;
-    color: var(--tinte-2);
-    line-height: 1.4;
-  }
-
-  .demo-aktionen {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    width: 100%;
-    margin-top: 12px;
-  }
-
-  .profil-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: 50%;
-    background: var(--flaeche-erhoeht);
-    border: 1px solid var(--glas-kante);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--tinte);
   }
 </style>

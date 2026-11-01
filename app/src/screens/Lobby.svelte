@@ -19,7 +19,7 @@
     spielCode?: string;
     istHost?: boolean;
     spielerListe?: LobbySpieler[];
-    onstart?: () => void;
+    onstart?: (daten?: { modus: string; rolle: string }) => void;
     onverlassen?: () => void;
     onzoneneditor?: () => void;
   }
@@ -138,6 +138,7 @@
 
   let jaegerGruppe = $derived(spieler.filter(s => s.rolle === 'jaeger'));
   let gejagtGruppe = $derived(spieler.filter(s => s.rolle === 'gejagt' || s.rolle === 'zombie'));
+  let ichSpieler = $derived(spieler.find(s => s.istIch));
 </script>
 
 <div class="lobby-screen">
@@ -293,7 +294,7 @@
             groesse="lg"
             breit={true}
             deaktiviert={!istHost || jaegerGruppe.length === 0}
-            onclick={onstart}
+            onclick={() => onstart?.({ modus, rolle: ichSpieler?.rolle === 'jaeger' ? 'seeker' : (modus === 'mrx' ? 'mrx' : 'hider') })}
           >
             <span>Jagd starten</span>
             <Icon name="arrow-right" size={20} color="#0a0a0c" />

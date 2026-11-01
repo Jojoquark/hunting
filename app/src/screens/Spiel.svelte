@@ -5,6 +5,7 @@
   import { geoTracker, type GeoPosition } from '../lib/ortung/geolocation';
   import { klang } from '../lib/klang/sound';
   import Icon from '../lib/ui/Icon.svelte';
+  import Karte from '../lib/karte/Karte.svelte';
 
   // Props über Svelte 5 $props()
   let {
@@ -102,6 +103,33 @@
   let istMrX = $derived(rolle === 'mrx');
   let kannFangen = $derived(rolle === 'seeker' || rolle === 'zombie' || rolle === 'detektiv');
 
+  let letzteGeoPosition = $state<{ lat: number; lng: number; genauigkeit: number } | null>(null);
+
+  let zonenZentrum = $derived<[number, number]>(
+    letzteGeoPosition ? [letzteGeoPosition.lng, letzteGeoPosition.lat] : [13.405, 52.52]
+  );
+
+  let kartenZone = $derived(
+    spielZustand.zone || {
+      mitte: zonenZentrum,
+      radius: spielZustand.zonenRadius || 1000,
+    }
+  );
+
+  let kartenSpieler = $derived.by(() => {
+    if (!spielZustand.spieler) return [];
+    return Object.entries(spielZustand.spieler)
+      .filter(([id, sp]: [string, any]) => id !== spielerId && sp.position && sp.sicht?.art !== 'unsichtbar')
+      .map(([id, sp]: [string, any]) => ({
+        id,
+        name: sp.spitzname || sp.name || id,
+        rolle: (sp.rolle === 'seeker' || sp.rolle === 'jaeger') ? 'jaeger' : (sp.rolle === 'zombie' ? 'zombie' : 'gejagt'),
+        lat: sp.sicht?.position?.lat || sp.position.lat,
+        lng: sp.sicht?.position?.lng || sp.position.lng,
+        unscharf: sp.sicht?.art === 'unscharf',
+      }));
+  });
+
   /**
    * Video-Wachhalter Engine:
    * Hält iOS Safari und Android PWAs durch einen stummen 1-Frame Inline-Videoloop
@@ -174,7 +202,12 @@
     geoTracker.aktiviereWakeLock().catch(() => {});
     initialisiereVideoWachhalter();
 
+    if (spielCode) {
+      spielNetz.verbinden(spielCode, spielerId || 'sp_' + Math.random().toString(36).substring(2, 6));
+    }
+
     const unsubGeo = geoTracker.abonnieren((pos: GeoPosition) => {
+      letzteGeoPosition = { lat: pos.lat, lng: pos.lng, genauigkeit: pos.genauigkeit };
       spielNetz.sendOrt({
         lat: pos.lat,
         lng: pos.lng,
@@ -278,7 +311,16 @@
   }
 </script>
 
-<div class="hud-overlay">
+<div class="spiel-ansicht">
+  <Karte
+    zentrum={zonenZentrum}
+    zone={kartenZone}
+    spieler={kartenSpieler}
+    eigenePosition={letzteGeoPosition}
+    pings={spielZustand.pings || []}
+    loot={spielZustand.loot || []}
+  />
+  <div class="hud-overlay">
   <!-- 1. OBERER SCHWEBENDER HUD-BEREICH -->
   <div class="oberer-hud-block">
     <header class="glas-container kopf-leiste">
@@ -632,9 +674,18 @@
       {/if}
     </div>
   {/if}
+  </div>
 </div>
 
 <style>
+  .spiel-ansicht {
+    position: relative;
+    width: 100%;
+    height: 100dvh;
+    overflow: hidden;
+    background: var(--grund);
+  }
+
   /* 
    * Strict Two-Layer Liquid Glass Styling 
    * Content Layer: Dark Obsidian (#0a0a0c)
