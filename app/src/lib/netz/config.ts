@@ -7,8 +7,8 @@ export interface NetzwerkKonfiguration {
 }
 
 const SPEICHER_SCHLUESSEL_CUSTOM_BACKEND = 'hunting_custom_backend';
-const STANDARD_PRODUKTION_HTTP = 'https://hunting-server.jojoquark.workers.dev';
-const STANDARD_PRODUKTION_WS = 'wss://hunting-server.jojoquark.workers.dev/ws';
+const STANDARD_PRODUKTION_HTTP = 'https://hunting-server.johann-koenig.workers.dev';
+const STANDARD_PRODUKTION_WS = 'wss://hunting-server.johann-koenig.workers.dev/ws';
 const STANDARD_LOKAL_HTTP = 'http://localhost:8787';
 const STANDARD_LOKAL_WS = 'ws://localhost:8787/ws';
 

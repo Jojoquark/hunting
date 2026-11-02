@@ -106,13 +106,13 @@ GitHub Actions fuehrt Typpruefung, Vitest und den PWA-Build aus. Browser-E2E-Tes
 
 - **PWA:** GitHub Pages muss im Repository auf „GitHub Actions“ als Quelle eingestellt sein. Aenderungen an App, Shared-Code oder Abhaengigkeitsmanifesten auf `main`/`master` bauen und veroeffentlichen die PWA.
 - **Worker:** Fuer den automatischen Deploy muessen `CLOUDFLARE_API_TOKEN` und `CLOUDFLARE_ACCOUNT_ID` als GitHub Actions Secrets gesetzt sein. Fehlen sie, bricht der Deploy-Workflow mit einer klaren Fehlermeldung ab.
-- **Backend-Adresse der PWA:** Standard ist `wss://hunting-server.jojoquark.workers.dev/ws`. Liegt der Worker unter einer anderen `workers.dev`-Subdomain, die Repository-Variable `HUNTING_WS_URL` (Settings → Secrets and variables → Actions → Variables) auf `wss://hunting-server.<subdomain>.workers.dev/ws` setzen und den Pages-Workflow erneut ausfuehren.
+- **Backend-Adresse der PWA:** Standard ist `wss://hunting-server.johann-koenig.workers.dev/ws`. Liegt der Worker unter einer anderen `workers.dev`-Subdomain, die Repository-Variable `HUNTING_WS_URL` (Settings → Secrets and variables → Actions → Variables) auf `wss://hunting-server.<subdomain>.workers.dev/ws` setzen und den Pages-Workflow erneut ausfuehren.
 
 ### Release-Checkliste vor der ersten Runde draussen
 
 1. Worker deployen: `cd worker && npx wrangler login && npx wrangler deploy`. Die ausgegebene URL notieren.
-2. Pruefen: `curl https://hunting-server.<subdomain>.workers.dev/` antwortet mit `HUNTING Backend API`.
-3. Weicht die Subdomain von `jojoquark` ab: `HUNTING_WS_URL` setzen (siehe oben) und „Deploy PWA to GitHub Pages“ neu starten.
+2. Pruefen: `curl https://hunting-server.johann-koenig.workers.dev/` antwortet mit `HUNTING Backend API`.
+3. Weicht die Subdomain von `johann-koenig` ab: `HUNTING_WS_URL` setzen (siehe oben) und „Deploy PWA to GitHub Pages“ neu starten.
 4. Auf zwei Handys `https://jojoquark.github.io/hunting/` oeffnen, Standort erlauben, ein Spiel erstellen und per QR-Code beitreten.
 5. Waehrend der Runde App geoeffnet und Display an lassen. Bei Funkloch verbindet sich die App automatisch neu; ein Neuladen fuehrt ueber den Spielcode in der Adresse zurueck in dieselbe Runde.
 
