@@ -74,6 +74,77 @@ export const de = {
     },
   },
 
+  rollen: {
+    titel: 'Deine Rolle',
+    verstanden: 'Los geht’s',
+    seeker: {
+      name: 'Jäger',
+      ziel: 'Fang alle Versteckten, bevor die Zeit abläuft.',
+      regeln: [
+        'Warte, bis die Versteckten fertig sind oder der Vorsprung abläuft.',
+        'Bei jedem Ping siehst du kurz, wo die Versteckten gerade sind.',
+        'Wer die Zone verlässt, ist für dich live sichtbar.',
+        'Bist du nah genug dran, leuchtet FANGEN auf.',
+      ],
+    },
+    hider: {
+      name: 'Versteckter',
+      ziel: 'Bleib frei, bis die Zeit abläuft.',
+      regeln: [
+        'Lauf los und versteck dich in der Zone, solange der Vorsprung läuft.',
+        'Tippe „Ich bin versteckt“, sobald du in Position bist.',
+        'Bei jedem Ping sehen die Jäger deinen Standort.',
+        'Die Zone schrumpft. Draußen bist du live sichtbar und scheidest nach der Kulanzzeit aus.',
+      ],
+    },
+    zombie: {
+      name: 'Zombie',
+      ziel: 'Verwandle alle Menschen in Zombies.',
+      regeln: [
+        'Menschen siehst du nur bei Pings.',
+        'Jeder Mensch, den du fängst, wird selbst zum Zombie und jagt mit.',
+        'Bist du nah genug dran, leuchtet FANGEN auf.',
+      ],
+    },
+    mensch: {
+      name: 'Mensch',
+      ziel: 'Überlebe bis zum Ende, ohne zum Zombie zu werden.',
+      regeln: [
+        'Versteck dich während des Vorsprungs und tippe „Ich bin versteckt“.',
+        'Zombies siehst du live, aber auf 50 m ungenau.',
+        'Wirst du gefangen, wirst du selbst zum Zombie.',
+        'Bleib in der Zone, sie schrumpft mit der Zeit.',
+      ],
+    },
+    mrx: {
+      name: 'Mr. X',
+      ziel: 'Bleib bis zum Ende unentdeckt.',
+      regeln: [
+        'Bewege dich zu Fuß, mit Bus und Bahn.',
+        'Trag jede Fahrt als Ticket ein. Die Detektive sehen das Verkehrsmittel.',
+        'Nach jedem dritten Ticket wird dein Standort aufgedeckt.',
+        'Tippe „Ich bin versteckt“, wenn du losgelegt hast.',
+      ],
+    },
+    detektiv: {
+      name: 'Detektiv',
+      ziel: 'Stellt Mr. X gemeinsam.',
+      regeln: [
+        'Mr. X’ Tickets erscheinen in der Fahrtentafel oben.',
+        'Bei Aufdeckungen siehst du seinen Standort.',
+        'Nutzt ebenfalls nur Bus, Bahn und eure Füße.',
+        'Bist du nah genug dran, leuchtet FANGEN auf.',
+      ],
+    },
+  },
+
+  versteck: {
+    fertig: 'Ich bin versteckt',
+    zurueck: 'Doch nicht versteckt',
+    status: '%s von %s versteckt',
+    alleFertig: 'Alle sind versteckt – die Jagd beginnt!',
+  },
+
   mrx: {
     fahrtentafel: 'Fahrtentafel Mr. X',
     ticketWaehlen: 'Ticket wählen',

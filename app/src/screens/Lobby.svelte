@@ -6,6 +6,7 @@
   import GlasKapsel from '../lib/ui/GlasKapsel.svelte';
   import Icon from '../lib/ui/Icon.svelte';
   import Sheet from '../lib/ui/Sheet.svelte';
+  import { pruefeBalance } from '../../../shared/src/balance';
 
   export interface LobbySpieler {
     id: string;
@@ -30,6 +31,7 @@
     radiusFaktor?: number;
     zoneManuell?: boolean;
     onZoneMitteAendern?: (mitte: [number, number]) => void;
+    onZoneRadiusAendern?: (radius: number) => void;
     onstart?: (daten?: { modus: string; rolle: string }) => void;
     onverlassen?: () => void;
     onzoneneditor?: () => void;
@@ -49,6 +51,7 @@
     radiusFaktor = 0.65,
     zoneManuell = false,
     onZoneMitteAendern,
+    onZoneRadiusAendern,
     onstart,
     onverlassen,
     onzoneneditor
@@ -77,6 +80,7 @@
   let zonenRadius = $state(untrack(() => zoneMitteRadius));
   let aktuellesZentrum = $state<[number, number]>(untrack(() => zoneMitte));
   let faehigkeitenAktiv = $state(false);
+  let testModus = $state(false);
 
   onMount(() => {
     const shareUrl = `${window.location.origin}${window.location.pathname}?code=${spielCode}`;
@@ -105,6 +109,7 @@
         if (einstellungen.pingIntervallMinuten) pingIntervall = einstellungen.pingIntervallMinuten;
         if (einstellungen.zonenRadiusStartMeter) zonenRadius = einstellungen.zonenRadiusStartMeter;
         if (typeof einstellungen.faehigkeitenAktiv === 'boolean') faehigkeitenAktiv = einstellungen.faehigkeitenAktiv;
+        if (typeof einstellungen.testModus === 'boolean') testModus = einstellungen.testModus;
         spieler = Object.values(daten.spieler || {}).map((eintrag: any) => ({
           id: eintrag.id,
           name: eintrag.spitzname || 'Spieler',
@@ -171,7 +176,8 @@
       versteckZeitMinuten: Number(versteckzeit),
       pingIntervallMinuten: Number(pingIntervall),
       zonenRadiusStartMeter: Number(zonenRadius),
-      faehigkeitenAktiv
+      faehigkeitenAktiv,
+      testModus
     };
   }
 
@@ -226,6 +232,7 @@
       versteckzeit = p.versteck;
       pingIntervall = p.ping;
       zonenRadius = p.radius;
+      onZoneRadiusAendern?.(p.radius);
       synchronisiereEinstellungen();
     }
   }
@@ -238,7 +245,44 @@
 
   let jaegerGruppe = $derived(spieler.filter(s => ['seeker', 'jaeger', 'zombie', 'detektiv'].includes(s.rolle)));
   let gejagtGruppe = $derived(spieler.filter(s => ['hider', 'gejagt', 'mensch', 'mrx'].includes(s.rolle)));
+  // Balance: Ping/Vorsprung passend zur Zone und Teamverhältnis (nur Hinweis, Start bleibt erlaubt)
+  const TEAM_PROBLEME = ['team_leer', 'zu_wenige_faenger', 'zu_viele_faenger'];
+  let balance = $derived(pruefeBalance({
+    zonenRadiusMeter: Number(zonenRadius),
+    pingIntervallMinuten: Number(pingIntervall),
+    versteckZeitMinuten: Number(versteckzeit),
+    dauerMinuten: Number(spieldauer),
+    zonenStufen,
+    modus,
+    faenger: jaegerGruppe.length,
+    gejagt: gejagtGruppe.length
+  }));
+  let zeitProbleme = $derived(balance.probleme.filter((p) => !TEAM_PROBLEME.includes(p.art)));
+  // Im Testmodus füllen Bots die Gegenseite auf, das Teamverhältnis ist dann egal.
+  let teamProbleme = $derived(testModus ? [] : balance.probleme.filter((p) => TEAM_PROBLEME.includes(p.art)));
+  let faengerName = $derived(modus === 'mrx' ? 'Detektive' : modus === 'zombie' ? 'Zombies' : 'Jäger');
+
+  function uebernehmeEmpfehlung() {
+    spieldauer = balance.empfehlung.dauerMinuten;
+    versteckzeit = balance.empfehlung.versteckZeitMinuten;
+    pingIntervall = balance.empfehlung.pingIntervallMinuten;
+    gewaehltesPreset = '';
+    synchronisiereEinstellungen();
+  }
+
+  function verteileTeamsAutomatisch() {
+    if (!istHost || !balance.empfohleneFaenger) return;
+    spielNetz.sendHost('teams_auto', { faenger: balance.empfohleneFaenger });
+  }
+
+  function wechsleTeam(s: LobbySpieler) {
+    if (!istHost) return;
+    const istFaenger = ['seeker', 'zombie', 'detektiv'].includes(s.rolle);
+    spielNetz.sendHost('team', { zielId: s.id, seite: istFaenger ? 'gejagt' : 'faenger' });
+  }
+
   let ichSpieler = $derived(spieler.find(s => s.istIch));
+  let mindestSpieler = $derived(testModus ? 1 : 2);
   let onlineSpielerAnzahl = $derived(spieler.filter((s) => s.gpsBereit).length);
 </script>
 
@@ -280,6 +324,32 @@
       <p class="lobby-hinweis fehler" role="alert">{verbindungsFehler}</p>
     {:else if !spielVerbindungAktiv}
       <p class="lobby-hinweis" role="status">Verbinde sicher mit dem Spielserver …</p>
+    {/if}
+
+    {#if istHost && (zeitProbleme.length > 0 || teamProbleme.length > 0)}
+      <section class="balance-warnung" role="status">
+        <div class="balance-titel">
+          <Icon name="alert-triangle" size={16} />
+          <span>Die Runde ist so nicht ausgewogen</span>
+        </div>
+        <ul>
+          {#each [...teamProbleme, ...zeitProbleme] as problem (problem.art)}
+            <li>{problem.text}</li>
+          {/each}
+        </ul>
+        <div class="balance-aktionen">
+          {#if teamProbleme.length > 0 && balance.empfohleneFaenger}
+            <GlasKnopf variante="sekundaer" groesse="sm" onclick={verteileTeamsAutomatisch}>
+              <span>Teams verteilen ({balance.empfohleneFaenger} {faengerName})</span>
+            </GlasKnopf>
+          {/if}
+          {#if zeitProbleme.length > 0}
+            <GlasKnopf variante="sekundaer" groesse="sm" onclick={uebernehmeEmpfehlung}>
+              <span>Zeiten anpassen ({balance.empfehlung.pingIntervallMinuten} Min. Ping)</span>
+            </GlasKnopf>
+          {/if}
+        </div>
+      </section>
     {/if}
 
     <!-- Modus-Wahl (Große, kontrastreiche Flächen) -->
@@ -332,8 +402,12 @@
           </div>
           <div class="team-liste">
             {#each jaegerGruppe as s (s.id)}
-              <div
+              <button
+                type="button"
                 class="spieler-eintrag"
+                disabled={!istHost}
+                title={istHost ? 'Antippen, um das Team zu wechseln' : undefined}
+                onclick={() => wechsleTeam(s)}
               >
                 <div class="spieler-avatar avatar-jaeger"></div>
                 <span class="spieler-name">{s.name}</span>
@@ -341,7 +415,7 @@
                   <span class="spieler-marke">{s.istIch ? 'Du' : ''}{s.istIch && s.istHost ? ' · ' : ''}{s.istHost ? 'Host' : ''}</span>
                 {/if}
                 <span class="verbindungs-punkt" class:getrennt={!s.gpsBereit} title={s.gpsBereit ? 'Verbunden' : 'Getrennt'} aria-label={s.gpsBereit ? 'Verbunden' : 'Getrennt'}></span>
-              </div>
+              </button>
             {/each}
             {#if jaegerGruppe.length === 0}
               <div class="leer-hinweis">Warte auf Spieler …</div>
@@ -356,8 +430,12 @@
           </div>
           <div class="team-liste">
             {#each gejagtGruppe as s (s.id)}
-              <div
+              <button
+                type="button"
                 class="spieler-eintrag"
+                disabled={!istHost}
+                title={istHost ? 'Antippen, um das Team zu wechseln' : undefined}
+                onclick={() => wechsleTeam(s)}
               >
                 <div class="spieler-avatar avatar-gejagt"></div>
                 <span class="spieler-name">{s.name}</span>
@@ -365,7 +443,7 @@
                   <span class="spieler-marke">{s.istIch ? 'Du' : ''}{s.istIch && s.istHost ? ' · ' : ''}{s.istHost ? 'Host' : ''}</span>
                 {/if}
                 <span class="verbindungs-punkt" class:getrennt={!s.gpsBereit} title={s.gpsBereit ? 'Verbunden' : 'Getrennt'} aria-label={s.gpsBereit ? 'Verbunden' : 'Getrennt'}></span>
-              </div>
+              </button>
             {/each}
             {#if gejagtGruppe.length === 0}
               <div class="leer-hinweis">Warte auf Spieler …</div>
@@ -373,6 +451,9 @@
           </div>
         </div>
       </div>
+      {#if istHost && spieler.length >= 2}
+        <p class="team-hinweis">Tippe auf einen Spieler, um sein Team zu wechseln.</p>
+      {/if}
     </section>
   </main>
 
@@ -390,17 +471,17 @@
             variante="primaer"
             groesse="lg"
             breit={true}
-            deaktiviert={!istHost || !spielVerbindungAktiv || (zoneBereit && onlineSpielerAnzahl < 2)}
+            deaktiviert={!istHost || !spielVerbindungAktiv || (zoneBereit && onlineSpielerAnzahl < mindestSpieler)}
             onclick={() => {
               if (!istHost || !spielVerbindungAktiv) return;
               if (!zoneBereit) {
                 onzoneneditor?.();
                 return;
               }
-              if (onlineSpielerAnzahl >= 2) onstart?.({ modus, rolle: rolleFuerSpiel(eigeneRolle()) });
+              if (onlineSpielerAnzahl >= mindestSpieler) onstart?.({ modus, rolle: rolleFuerSpiel(eigeneRolle()) });
             }}
           >
-            <span>{!istHost ? 'Warte auf Host' : !spielVerbindungAktiv ? 'Verbinde …' : !zoneBereit ? 'Zone festlegen' : onlineSpielerAnzahl < 2 ? 'Warte auf Mitspieler' : 'Jagd starten'}</span>
+            <span>{!istHost ? 'Warte auf Host' : !spielVerbindungAktiv ? 'Verbinde …' : !zoneBereit ? 'Zone festlegen' : onlineSpielerAnzahl < mindestSpieler ? 'Warte auf Mitspieler' : testModus ? 'Test starten' : 'Jagd starten'}</span>
             <Icon name="arrow-right" size={20} color="#0a0a0c" />
           </GlasKnopf>
         </div>
@@ -447,6 +528,7 @@
           <span class="wert tabular-nums">{versteckzeit} Min.</span>
         </label>
         <input id="versteckzeit" type="range" min="1" max="30" step="1" bind:value={versteckzeit} onchange={synchronisiereEinstellungen} disabled={!istHost} />
+        <span class="slider-hinweis">Passend für {zonenRadius} m Zone: {balance.versteckBereich[0]}–{balance.versteckBereich[1]} Min.</span>
       </div>
 
       <div class="slider-gruppe">
@@ -455,11 +537,26 @@
           <span class="wert tabular-nums">{pingIntervall} Min.</span>
         </label>
         <input id="pingintervall" type="range" min="1" max="30" step="1" bind:value={pingIntervall} onchange={synchronisiereEinstellungen} disabled={!istHost} />
+        <span class="slider-hinweis">Passend für {zonenRadius} m Zone: {balance.pingBereich[0]}–{balance.pingBereich[1]} Min.</span>
       </div>
+
+      {#if istHost}
+        <GlasKnopf variante="sekundaer" groesse="md" breit={true} onclick={uebernehmeEmpfehlung}>
+          <span>Passend zur Zone einstellen</span>
+        </GlasKnopf>
+      {/if}
 
       <div class="schalter-gruppe">
         <span class="schalter-text">Fähigkeiten & Loot aktivieren</span>
         <input type="checkbox" bind:checked={faehigkeitenAktiv} class="toggle-checkbox" onchange={synchronisiereEinstellungen} disabled={!istHost} />
+      </div>
+
+      <div class="schalter-gruppe">
+        <span class="schalter-text">
+          Testmodus
+          <span class="schalter-unterzeile">Allein starten mit 3 Bots, bewegen per Tipp auf die Karte</span>
+        </span>
+        <input type="checkbox" bind:checked={testModus} class="toggle-checkbox" onchange={synchronisiereEinstellungen} disabled={!istHost} />
       </div>
 
       <div class="zonen-link-box">
@@ -644,6 +741,11 @@
   }
 
   .spieler-eintrag {
+    width: 100%;
+    border: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -654,7 +756,11 @@
     user-select: none;
     transition: transform var(--zeit-schnell) var(--feder-aus);
   }
-  .spieler-eintrag:active {
+  .spieler-eintrag:disabled {
+    cursor: default;
+  }
+
+  .spieler-eintrag:active:not(:disabled) {
     transform: scale(0.97);
   }
 
@@ -680,6 +786,54 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .balance-warnung {
+    background: rgba(255, 92, 0, 0.08);
+    border: 1px solid rgba(255, 92, 0, 0.45);
+    border-radius: var(--radius-m);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .balance-titel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 0.875rem;
+    color: var(--akzent);
+  }
+
+  .balance-warnung ul {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 0.8125rem;
+    color: var(--tinte);
+    line-height: 1.4;
+  }
+
+  .balance-aktionen {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .team-hinweis {
+    margin: 8px 0 0;
+    font-size: 0.75rem;
+    color: var(--tinte-3);
+    text-align: center;
+  }
+
+  .slider-hinweis {
+    font-size: 0.75rem;
+    color: var(--tinte-2);
   }
 
   .spieler-marke {
@@ -847,6 +1001,13 @@
   .schalter-text {
     font-size: 0.875rem;
     color: var(--tinte);
+  }
+
+  .schalter-unterzeile {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.75rem;
+    color: var(--tinte-2);
   }
 
   .toggle-checkbox {

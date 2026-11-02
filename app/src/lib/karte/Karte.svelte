@@ -62,9 +62,14 @@
 
   let kartenContainer: HTMLDivElement;
   let karte: maplibregl.Map | null = null;
+  // Als $state, damit die Effekte nach dem Laden des Kartenstils erneut laufen.
+  let karteBereit = $state(false);
+  let aufEigeneZentriert = false;
+  let zoneEingepasst = false;
   let spielerMarkers: Map<string, maplibregl.Marker> = new Map();
   let pingMarkers: Map<string, maplibregl.Marker> = new Map();
   let lootMarkers: Map<string, maplibregl.Marker> = new Map();
+  const leer = { type: 'FeatureCollection' as const, features: [] };
   let eigenMarker: maplibregl.Marker | null = null;
 
   // Erzeugt einen GeoJSON-Polygon-Kreis (64 Punkte) für Zonen
@@ -161,7 +166,7 @@
         }
       });
 
-      aktualisiereMarker();
+      karteBereit = true;
     });
 
     karte.on('click', (e) => {
@@ -177,30 +182,32 @@
     karte?.remove();
   });
 
-  // Reaktivität bei Zonen-Änderungen
+  // Reaktivität bei Zonen-Änderungen. Die Props werden vor dem Bereit-Check gelesen,
+  // sonst merkt sich Svelte keine Abhängigkeit und der Effekt läuft nie wieder.
   $effect(() => {
-    if (!karte || !karte.isStyleLoaded()) return;
-
-    const sourceAktuell = karte.getSource('zone-aktuell') as maplibregl.GeoJSONSource | undefined;
-    if (sourceAktuell && zone) {
-      sourceAktuell.setData(erzeugeKreisGeoJSON(zone.mitte, zone.radius));
+    const aktuell = zone ? erzeugeKreisGeoJSON(zone.mitte, zone.radius) : leer;
+    const naechste = zone?.vorschauAktiv && zone.naechsteMitte && zone.naechsterRadius
+      ? erzeugeKreisGeoJSON(zone.naechsteMitte, zone.naechsterRadius)
+      : leer;
+    if (!karteBereit || !karte) return;
+    // Beim ersten Zonen-Update die ganze Zone ins Bild holen.
+    if (zone && !zoneEingepasst) {
+      zoneEingepasst = true;
+      aufEigeneZentriert = true;
+      const ring = aktuell.type === 'Feature' ? aktuell.geometry.coordinates[0] : [];
+      const lngs = ring.map((p) => p[0]);
+      const lats = ring.map((p) => p[1]);
+      karte.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 48, duration: 0 });
     }
-
-    const sourceNaechste = karte.getSource('zone-naechste') as maplibregl.GeoJSONSource | undefined;
-    if (sourceNaechste) {
-      if (zone?.vorschauAktiv && zone.naechsteMitte && zone.naechsterRadius) {
-        sourceNaechste.setData(erzeugeKreisGeoJSON(zone.naechsteMitte, zone.naechsterRadius));
-      } else {
-        sourceNaechste.setData({ type: 'FeatureCollection', features: [] });
-      }
-    }
+    (karte.getSource('zone-aktuell') as maplibregl.GeoJSONSource | undefined)?.setData(aktuell);
+    (karte.getSource('zone-naechste') as maplibregl.GeoJSONSource | undefined)?.setData(naechste);
   });
 
-  // Reaktivität für Marker
+  // Reaktivität für Marker (gleiche Regel: Abhängigkeiten zuerst lesen)
   $effect(() => {
-    if (karte && karte.isStyleLoaded()) {
-      aktualisiereMarker();
-    }
+    void [spieler, pings, loot, eigenePosition];
+    if (!karteBereit) return;
+    aktualisiereMarker();
   });
 
   function erstelleMarkerElement(s: SpielerMarker): HTMLElement {
@@ -223,7 +230,11 @@
   function aktualisiereMarker() {
     if (!karte) return;
 
-    // 1. Eigener Standort
+    // 1. Eigener Standort (beim ersten Fix einmal dorthin springen)
+    if (eigenePosition && !aufEigeneZentriert) {
+      aufEigeneZentriert = true;
+      karte.jumpTo({ center: [eigenePosition.lng, eigenePosition.lat] });
+    }
     if (eigenePosition) {
       if (!eigenMarker) {
         const el = document.createElement('div');
@@ -251,6 +262,11 @@
       const bestehend = spielerMarkers.get(s.id);
       if (bestehend) {
         bestehend.setLngLat([s.lng, s.lat]);
+        // Rolle kann wechseln (z. B. Mensch wird Zombie)
+        const el = bestehend.getElement();
+        el.classList.remove('pin-jaeger', 'pin-gejagt', 'pin-zombie', 'ist-unscharf');
+        el.classList.add(`pin-${s.rolle}`);
+        if (s.unscharf) el.classList.add('ist-unscharf');
       } else {
         const el = erstelleMarkerElement(s);
         const m = new maplibregl.Marker({ element: el })
@@ -277,6 +293,26 @@
           .setLngLat([p.lng, p.lat])
           .addTo(karte!);
         pingMarkers.set(p.id, m);
+      }
+    });
+
+    // 4. Loot
+    const lootIds = new Set(loot.map(l => l.id));
+    lootMarkers.forEach((m, id) => {
+      if (!lootIds.has(id)) {
+        m.remove();
+        lootMarkers.delete(id);
+      }
+    });
+    loot.forEach(l => {
+      if (!lootMarkers.has(l.id)) {
+        const el = document.createElement('div');
+        el.className = 'loot-pin';
+        el.title = `+${l.wert} Energie`;
+        const m = new maplibregl.Marker({ element: el })
+          .setLngLat([l.lng, l.lat])
+          .addTo(karte!);
+        lootMarkers.set(l.id, m);
       }
     });
   }
@@ -434,6 +470,16 @@
   @keyframes eigenPulsWelle {
     0% { transform: scale(0.6); opacity: 0.8; }
     100% { transform: scale(2.2); opacity: 0; }
+  }
+
+  :global(.loot-pin) {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    transform: rotate(45deg);
+    background: #ffd166;
+    border: 2px solid #0a0a0c;
+    box-shadow: 0 0 10px rgba(255, 209, 102, 0.6);
   }
 
   :global(.ping-karten-pin) {

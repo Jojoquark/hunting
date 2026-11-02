@@ -9,6 +9,7 @@
   import Ende from './screens/Ende.svelte';
   import Profil from './screens/Profil.svelte';
   import { ermittleBasisHttpUrl } from './lib/netz/config';
+  import { leseKonto, pruefeKonto, type KontoSitzung } from './lib/netz/konto';
 
   // Typdefinition für die Spielphasen / Bildschirme
   type Bildschirm =
@@ -37,6 +38,12 @@
   let serverFehler = $state('');
   let spielErstellenLaedt = $state(false);
   let gefangenGemeldet = false;
+  let konto = $state<KontoSitzung | null>(null);
+
+  function setzeKonto(neu: KontoSitzung | null) {
+    konto = neu;
+    if (neu) handleSpitznameAendern(neu.name);
+  }
 
   interface SpielSitzung {
     code: string;
@@ -78,6 +85,12 @@
     } catch {
       // Die App bleibt ohne lokale Speicherung nutzbar.
     }
+
+    // Gespeicherte Anmeldung sofort nutzen und im Hintergrund prüfen.
+    setzeKonto(leseKonto());
+    void pruefeKonto().then((geprueft) => {
+      if (!geprueft && konto) konto = null;
+    });
 
     const code = new URLSearchParams(window.location.search).get('code');
     if (code) void handleSpielBeitreten(code);
@@ -267,6 +280,7 @@
       radiusFaktor={zonenDaten.faktor}
       zoneManuell={zoneManuellGesetzt}
       onZoneMitteAendern={handleZoneMitteAktualisiert}
+      onZoneRadiusAendern={(radius) => (zonenDaten = { ...zonenDaten, radius })}
       {istHost}
       onstart={handleSpielStart}
       onverlassen={verlasseSpiel}
@@ -327,6 +341,8 @@
   {:else if aktiverBildschirm === 'profil'}
     <Profil
       spitzname={spitzname}
+      {konto}
+      onKontoAenderung={setzeKonto}
       onSpitznameChange={handleSpitznameAendern}
       onZurueck={geheZurueck}
     />

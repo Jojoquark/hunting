@@ -14,6 +14,7 @@ import { loeseTicket, pruefeMrXEntfernungsAufdeckung, pruefeDetektivTempo } from
 import { nutzeFaehigkeit } from './faehigkeiten';
 import { spawneLootPunkt, pruefeLootEinsammeln } from './loot';
 import { erstelleZonenPlan, berechneAktuelleZone } from '../../shared/src/zone';
+import { zufaelligerPunktInKreis } from './geo';
 import {
   hasheZugangstoken,
   istGueltigePosition,
@@ -23,7 +24,6 @@ import {
   liegtImFangRadius,
   erstelleReplayDeaktiviertAntwort,
   anonymisiereAbgelaufeneSpielDaten,
-  rolleFuerSpieler,
   vergleicheKonstant
 } from './sicherheit';
 
@@ -142,8 +142,24 @@ export class GameRoom {
     return 0;
   }
 
+  // Standard: Host fängt (Klassisch/Zombie) bzw. ist Mr. X; alle anderen auf der Gegenseite.
+  private standardSeite(spielerId: string): 'faenger' | 'gejagt' {
+    const istHost = spielerId === this.zustand.hostId;
+    if (this.zustand.modus === 'mrx') return istHost ? 'gejagt' : 'faenger';
+    return istHost ? 'faenger' : 'gejagt';
+  }
+
   private rolleFuerSpieler(spielerId: string): Spieler['rolle'] {
-    return rolleFuerSpieler(this.zustand.modus, spielerId === this.zustand.hostId);
+    const seite = this.zustand.teamZuteilung?.[spielerId] ?? this.standardSeite(spielerId);
+    const modus = this.zustand.modus;
+    if (seite === 'faenger') return modus === 'zombie' ? 'zombie' : modus === 'mrx' ? 'detektiv' : 'seeker';
+    return modus === 'zombie' ? 'mensch' : modus === 'mrx' ? 'mrx' : 'hider';
+  }
+
+  private teamGroessen(): { faenger: number; gejagt: number } {
+    const spieler = Object.values(this.zustand.spieler);
+    const faenger = spieler.filter((sp) => ['seeker', 'zombie', 'detektiv'].includes(sp.rolle)).length;
+    return { faenger, gejagt: spieler.length - faenger };
   }
 
   private weiseRollenZu(): void {
@@ -180,7 +196,7 @@ export class GameRoom {
         (this.zustand.einstellungen as unknown as Record<string, unknown>)[schluessel] = zahl;
       }
     }
-    for (const schluessel of ['naeheWarnungAktiv', 'funklochStrafeAktiv', 'faehigkeitenAktiv', 'mrxSiehtDetektive']) {
+    for (const schluessel of ['naeheWarnungAktiv', 'funklochStrafeAktiv', 'faehigkeitenAktiv', 'mrxSiehtDetektive', 'testModus']) {
       if (typeof input[schluessel] === 'boolean') {
         (this.zustand.einstellungen as unknown as Record<string, unknown>)[schluessel] = input[schluessel];
       }
@@ -525,7 +541,7 @@ export class GameRoom {
         }
 
         // Plausibilitätscheck: Geschwindigkeitsprüfung (> 50 m/s Teleport)
-        if (sp.position) {
+        if (sp.position && !this.zustand.einstellungen.testModus) {
           const dt = Math.max(0.1, (this.zustand.jetzt - (sp.letztesUpdateZeit || this.zustand.jetzt)) / 1000);
           const dist = haversineDistanz(sp.position, pos);
           if (!Number.isFinite(dist) || dist / dt > 50) {
@@ -760,17 +776,70 @@ export class GameRoom {
         break;
       }
 
+      case 'versteckt': {
+        const sp = this.zustand.spieler[this.state.getTags(ws)[0]];
+        if (!sp || this.zustand.phase !== 'verstecken' || !this.istVerstecker(sp)) return;
+        sp.versteckt = aktion.fertig !== false;
+        const abstimmung = this.versteckAbstimmung();
+        if (abstimmung.gesamt > 0 && abstimmung.fertig === abstimmung.gesamt) {
+          this.zustand.jetzt = Date.now();
+          this.starteJagd();
+        }
+        await this.speichereZustand();
+        this.verteileZustand();
+        break;
+      }
+
       case 'host_start': {
         const hostId = this.state.getTags(ws)[0];
         if (this.zustand.hostId === hostId && this.zustand.phase === 'lobby') {
           const online = Object.values(this.zustand.spieler).filter((spieler) => spieler.online);
-          if (online.length < 2) {
+          if (this.zustand.einstellungen.testModus) this.fuegeTestBotsHinzu();
+          else if (online.length < 2) {
             ws.send(JSON.stringify({ typ: 'fehler', nachricht: 'Zum Starten müssen mindestens zwei Spieler verbunden sein' }));
             return;
           }
           this.weiseRollenZu();
+          const teams = this.teamGroessen();
+          if (teams.faenger === 0 || teams.gejagt === 0) {
+            ws.send(JSON.stringify({ typ: 'fehler', nachricht: 'Beide Teams brauchen mindestens einen Spieler' }));
+            return;
+          }
           await this.starteSpiel();
         }
+        break;
+      }
+
+      case 'host_team': {
+        const hostId = this.state.getTags(ws)[0];
+        const zielId = typeof aktion.zielId === 'string' ? aktion.zielId : '';
+        if (this.zustand.hostId !== hostId || this.zustand.phase !== 'lobby' || !this.zustand.spieler[zielId]) return;
+        if (aktion.seite !== 'faenger' && aktion.seite !== 'gejagt') return;
+        this.zustand.teamZuteilung = { ...(this.zustand.teamZuteilung ?? {}), [zielId]: aktion.seite };
+        this.weiseRollenZu();
+        await this.speichereZustand();
+        this.verteileZustand();
+        break;
+      }
+
+      case 'host_teams_auto': {
+        const hostId = this.state.getTags(ws)[0];
+        if (this.zustand.hostId !== hostId || this.zustand.phase !== 'lobby') return;
+        const ids = Object.keys(this.zustand.spieler);
+        const anzahl = Math.trunc(Number(aktion.faenger));
+        if (!Number.isFinite(anzahl) || anzahl < 1 || anzahl >= ids.length) return;
+        // Fisher-Yates mit kryptografischem Zufall
+        const zufall = crypto.getRandomValues(new Uint32Array(ids.length));
+        for (let i = ids.length - 1; i > 0; i--) {
+          const j = zufall[i] % (i + 1);
+          [ids[i], ids[j]] = [ids[j], ids[i]];
+        }
+        this.zustand.teamZuteilung = Object.fromEntries(
+          ids.map((id, index) => [id, index < anzahl ? 'faenger' : 'gejagt'])
+        );
+        this.weiseRollenZu();
+        await this.speichereZustand();
+        this.verteileZustand();
         break;
       }
 
@@ -778,6 +847,8 @@ export class GameRoom {
         const hostId = this.state.getTags(ws)[0];
         if (this.zustand.hostId === hostId && this.zustand.phase === 'lobby') {
           if (['klassisch', 'zombie', 'mrx'].includes(aktion.modus)) {
+            // Beim Moduswechsel gelten wieder die Standardteams, die Seiten bedeuten dort etwas anderes.
+            if (aktion.modus !== this.zustand.modus) this.zustand.teamZuteilung = {};
             this.zustand.modus = aktion.modus as SpielModus;
             this.weiseRollenZu();
           }
@@ -812,14 +883,11 @@ export class GameRoom {
 
     if (this.zustand.phase === 'verstecken') {
       const endeVerstecken = this.zustand.phasenStartZeit + this.zustand.einstellungen.versteckZeitMinuten * 60000;
-      if (this.zustand.jetzt >= endeVerstecken) {
-        this.zustand.phase = 'jagd';
-        this.zustand.phasenStartZeit = this.zustand.jetzt;
-        this.planeNaechstenPing();
-        this.erstelleZonenPlanFuerJagd();
-        this.broadcastEreignis({ typ: 'phase', phase: 'jagd' });
-      }
+      const abstimmung = this.versteckAbstimmung();
+      const alleVersteckt = abstimmung.gesamt > 0 && abstimmung.fertig === abstimmung.gesamt;
+      if (this.zustand.jetzt >= endeVerstecken || alleVersteckt) this.starteJagd();
     } else if (this.zustand.phase === 'jagd') {
+      this.bewegeTestBots();
       // 1. Ping fällig?
       if (this.zustand.jetzt >= this.zustand.naechsterPingZeit) {
         this.fuehrePingAus();
@@ -831,7 +899,8 @@ export class GameRoom {
       this.aktualisiereZonenStatus();
 
       // 2. Loot spawnen alle 5 Min.
-      if (!this.zustand.letzterLootSpawn || this.zustand.jetzt - this.zustand.letzterLootSpawn >= 300000) {
+      if (this.zustand.einstellungen.faehigkeitenAktiv &&
+        (!this.zustand.letzterLootSpawn || this.zustand.jetzt - this.zustand.letzterLootSpawn >= 300000)) {
         if (this.zustand.lootPunkte.length < 5) {
           spawneLootPunkt(this.zustand);
         }
@@ -861,6 +930,55 @@ export class GameRoom {
     }
   }
 
+  private static readonly BOT_NAMEN = ['Bot Ada', 'Bot Bruno', 'Bot Cleo'];
+
+  // Testmodus: drei Bots auf der Gegenseite des Hosts, verteilt in der Zone.
+  private fuegeTestBotsHinzu(): void {
+    const hostSeite = this.zustand.teamZuteilung?.[this.zustand.hostId] ?? this.standardSeite(this.zustand.hostId);
+    const botSeite = hostSeite === 'faenger' ? 'gejagt' : 'faenger';
+    GameRoom.BOT_NAMEN.forEach((name, index) => {
+      const id = `bot-${index + 1}`;
+      if (this.zustand.spieler[id]) return;
+      this.zustand.teamZuteilung = { ...(this.zustand.teamZuteilung ?? {}), [id]: botSeite };
+      const punkt = zufaelligerPunktInKreis(this.zustand.aktuelleZone.mittelpunkt, this.zustand.aktuelleZone.radiusMeter * 0.6);
+      this.zustand.spieler[id] = {
+        id,
+        spitzname: name,
+        icon: 'circle',
+        farbe: '#8fe33a',
+        rolle: this.rolleFuerSpieler(id),
+        bereit: true,
+        online: true,
+        energie: 0,
+        ausserhalbZone: false,
+        gefangen: false,
+        versteckt: true,
+        istBot: true,
+        position: { ...punkt, genauigkeit: 5, zeit: this.zustand.jetzt },
+        letztesUpdateZeit: this.zustand.jetzt,
+        faehigkeitenStatus: { tarnkappeAktiv: false, abklingzeiten: {} }
+      };
+    });
+  }
+
+  // Bots gehen alle 10 Sek. etwa 12 m in eine zufällige Richtung und bleiben in der Zone.
+  private bewegeTestBots(): void {
+    const zone = this.zustand.aktuelleZone;
+    for (const sp of Object.values(this.zustand.spieler)) {
+      if (!sp.istBot || sp.gefangen || !sp.position) continue;
+      let ziel = zufaelligerPunktInKreis(sp.position, 15);
+      if (!istInKreis(ziel, zone.mittelpunkt, zone.radiusMeter * 0.9)) {
+        ziel = {
+          lat: sp.position.lat + (zone.mittelpunkt.lat - sp.position.lat) * 0.2,
+          lng: sp.position.lng + (zone.mittelpunkt.lng - sp.position.lng) * 0.2
+        };
+      }
+      sp.position = { ...ziel, genauigkeit: 5, zeit: this.zustand.jetzt };
+      sp.letztesUpdateZeit = this.zustand.jetzt;
+      sp.ausserhalbZone = false;
+    }
+  }
+
   private fuehrePingAus(): void {
     for (const sp of Object.values(this.zustand.spieler)) {
       if (['hider', 'mensch', 'mrx'].includes(sp.rolle) && !sp.gefangen) {
@@ -878,6 +996,24 @@ export class GameRoom {
         }
       }
     }
+  }
+
+  private starteJagd(): void {
+    this.zustand.phase = 'jagd';
+    this.zustand.phasenStartZeit = this.zustand.jetzt;
+    this.planeNaechstenPing();
+    this.erstelleZonenPlanFuerJagd();
+    this.broadcastEreignis({ typ: 'phase', phase: 'jagd' });
+  }
+
+  private istVerstecker(sp: Spieler): boolean {
+    return ['hider', 'mensch', 'mrx'].includes(sp.rolle) && !sp.gefangen;
+  }
+
+  // Wer abstimmen muss: alle verbundenen Verstecker. Getrennte blockieren den Start nicht.
+  private versteckAbstimmung(): { fertig: number; gesamt: number } {
+    const verstecker = Object.values(this.zustand.spieler).filter((sp) => this.istVerstecker(sp) && sp.online);
+    return { fertig: verstecker.filter((sp) => sp.versteckt).length, gesamt: verstecker.length };
   }
 
   private erstelleZonenPlanFuerJagd(): void {
@@ -1012,8 +1148,14 @@ export class GameRoom {
         ? Object.values(this.zustand.spieler).find((sp) => sp.rolle === 'mrx')?.mrxStatus?.tickets ?? []
         : [],
       naechsterPingZeit: this.zustand.naechsterPingZeit,
-      aktuelleZone: this.zustand.aktuelleZone,
+      // Nur die aktuelle Zone: Ziel und Zeitplan der nächsten Stufen bleiben geheim.
+      aktuelleZone: {
+        mittelpunkt: this.zustand.aktuelleZone.mittelpunkt,
+        radiusMeter: this.zustand.aktuelleZone.radiusMeter,
+        stufe: this.zustand.aktuelleZone.stufe
+      },
       zonenStatus: this.zustand.zonenStatus ?? 'stabil',
+      versteckAbstimmung: this.versteckAbstimmung(),
       energie: Math.floor(betrachter.energie),
       naheGegner,
       fangZielId: Object.values(this.zustand.spieler).find((ziel) => {
@@ -1032,7 +1174,9 @@ export class GameRoom {
             icon: sp.icon,
             online: sp.online,
             istHost: sp.id === this.zustand.hostId,
+            istBot: Boolean(sp.istBot),
             gefangen: sp.gefangen,
+            versteckt: Boolean(sp.versteckt),
             ausserhalbZone: sp.ausserhalbZone,
             sicht: gefilterteSicht[id]
           }

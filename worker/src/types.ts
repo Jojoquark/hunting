@@ -61,6 +61,10 @@ export interface Spieler {
   ausserhalbZoneSeit?: number;
   funklochStrafeBis?: number;
   gefangen: boolean;
+  // Versteckphase: Spieler meldet, dass er in Position ist
+  versteckt?: boolean;
+  // Testmodus-Bot ohne echte Verbindung
+  istBot?: boolean;
   gefangenUm?: number;
   gefangenVon?: string;
   faehigkeitenStatus: {
@@ -113,6 +117,8 @@ export interface SpielEinstellungen {
   mrxAufdeckDistanzMeter: number;
   mrxAufdeckZeitMinuten: number;
   mrxSiehtDetektive: boolean;
+  // Testmodus: Start allein möglich, Bots füllen auf, Position darf springen (Tippen auf Karte)
+  testModus?: boolean;
 }
 
 export interface LootPunkt {
@@ -156,6 +162,8 @@ export interface SpielZustand {
     schrumpfEndeZeitpunkt: number;
   }>;
   zonenStatus?: 'stabil' | 'warnung' | 'schrumpft';
+  // Lobby: vom Host gesetzte Teamseite je Spieler; fehlt ein Eintrag, gilt die Standardseite.
+  teamZuteilung?: Record<string, 'faenger' | 'gejagt'>;
   phasenStartZeit: number;
   naechsterPingZeit: number;
   jetzt: number;

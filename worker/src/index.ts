@@ -1,14 +1,17 @@
 import { GameRoom } from './GameRoom';
 import { handleTransitNearby } from './transit';
+import { Konto, normalisiereName, pruefeName, pruefePasswort } from './Konto';
 
-export { GameRoom };
+export { GameRoom, Konto };
 
 export interface Env {
   GAME_ROOM: DurableObjectNamespace;
+  KONTO: DurableObjectNamespace;
   VAPID_PUBLIC?: string;
   VAPID_PRIVATE?: string;
   FIREBASE_SA?: string;
   QR_SECRET?: string;
+  ENVIRONMENT?: string;
 }
 
 // Erlaubte Ursprünge für GitHub Pages und lokale Entwicklung
@@ -74,6 +77,8 @@ async function begrenzeAnfragen(
   limit: number,
   fensterMs: number
 ): Promise<Response | null> {
+  // Lokale Entwicklung (`pnpm --filter @hunting/worker dev`) testet viele Runden hintereinander.
+  if (env.ENVIRONMENT === 'development') return null;
   const ip = request.headers.get('CF-Connecting-IP') || 'lokal';
   const ipHash = await hasheWert(ip);
   const id = env.GAME_ROOM.idFromName(`_limit_${limitTyp}_${ipHash}`);
@@ -191,7 +196,32 @@ export default {
       return stub.fetch(request);
     }
 
-    // 6. GET /transit/nearby?lat=...&lng=...
+    // 6. Konto: registrieren, anmelden, Sitzung prüfen, abmelden (Benutzername + Passwort)
+    const kontoMatch = url.pathname.match(/^\/konto\/(registrieren|anmelden|pruefen|abmelden)$/);
+    if (request.method === 'POST' && kontoMatch) {
+      if (requestBodyZuGross(request)) return new Response('Anfrage zu groß', { status: 413, headers: corsHeaders });
+      const aktion = kontoMatch[1];
+      const daten = await request.json().catch(() => ({})) as { name?: unknown; passwort?: unknown; token?: unknown };
+      const nameFehler = pruefeName(daten.name);
+      if (nameFehler) return new Response(nameFehler, { status: 400, headers: corsHeaders });
+      if (aktion === 'registrieren' || aktion === 'anmelden') {
+        const passwortFehler = pruefePasswort(daten.passwort);
+        if (passwortFehler) return new Response(passwortFehler, { status: 400, headers: corsHeaders });
+        const limit = await begrenzeAnfragen(request, env, `konto-${aktion}`, aktion === 'registrieren' ? 5 : 30, 60 * 60 * 1000);
+        if (limit) return limit;
+      }
+      const stub = env.KONTO.get(env.KONTO.idFromName(normalisiereName(daten.name as string)));
+      const res = await stub.fetch(new Request(`https://konto/${aktion}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: daten.name, passwort: daten.passwort, token: daten.token })
+      }));
+      const headers = new Headers(res.headers);
+      new Headers(corsHeaders).forEach((wert, schluessel) => headers.set(schluessel, wert));
+      return new Response(res.body, { status: res.status, headers });
+    }
+
+    // 7. GET /transit/nearby?lat=...&lng=...
     if (request.method === 'GET' && url.pathname === '/transit/nearby') {
       const lat = parseFloat(url.searchParams.get('lat') || '0');
       const lng = parseFloat(url.searchParams.get('lng') || '0');
@@ -203,7 +233,7 @@ export default {
       return Response.json(daten, { headers: corsHeaders });
     }
 
-    // 7. Push ist deaktiviert, bis eine echte VAPID-Signatur implementiert ist.
+    // 8. Push ist deaktiviert, bis eine echte VAPID-Signatur implementiert ist.
     if (request.method === 'POST' && url.pathname === '/push/abo') {
       return new Response('Push-Benachrichtigungen sind derzeit deaktiviert', { status: 501, headers: corsHeaders });
     }

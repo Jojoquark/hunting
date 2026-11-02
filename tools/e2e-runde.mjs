@@ -39,26 +39,51 @@ h.senden('hallo', { spitzname: 'Jäger' });
 g.senden('hallo', { spitzname: 'Versteck' });
 await warte(300);
 
+// Teams: Host setzt den Gast zu den Jägern -> Gejagte leer -> Start muss abgelehnt werden
+h.senden('host_team', { zielId: gast.spielerId, seite: 'faenger' });
+await warte(300);
+pruefe('Host kann Team wechseln', g.letzterZustand?.spieler?.[gast.spielerId]?.rolle === 'seeker');
+h.senden('host_start');
+await warte(300);
+pruefe('Start ohne Gejagte abgelehnt', h.letzterZustand?.phase === 'lobby' && h.sonst.some((m) => m.typ === 'fehler' && /Teams/.test(m.nachricht)));
+g.senden('host_team', { zielId: gast.spielerId, seite: 'gejagt' });
+await warte(300);
+pruefe('Nur Host darf Teams setzen', g.letzterZustand?.spieler?.[gast.spielerId]?.rolle === 'seeker');
+h.senden('host_team', { zielId: gast.spielerId, seite: 'gejagt' });
+await warte(300);
+pruefe('Team zurückgesetzt', g.letzterZustand?.spieler?.[gast.spielerId]?.rolle === 'hider');
+h.sonst.length = 0;
+
 h.ws.send(JSON.stringify({ typ: 'ping', zeit: 12345 }));
 await warte(200);
 pruefe('ping beantwortet', h.pong?.zeit === 12345 && typeof h.pong?.daten?.serverZeit === 'number');
 
 h.senden('host_setup', {
   modus: 'klassisch',
-  einstellungen: { versteckZeitMinuten: 0, pingIntervallMinuten: 1, dauerMinuten: 5, faehigkeitenAktiv: true },
+  einstellungen: { versteckZeitMinuten: 10, pingIntervallMinuten: 1, dauerMinuten: 5, faehigkeitenAktiv: true },
   zoneMittelpunkt: { lat: 52.52, lng: 13.405 },
   zonenRadiusStartMeter: 500, zonenStufen: 3, radiusFaktor: 0.6
 });
 await warte(200);
 // Falsche Geräteuhr (+10 min) darf Positionen nicht verwerfen.
-h.senden('ort', { lat: 52.5200, lng: 13.4050, genauigkeit: 5, zeit: Date.now() + 600000 });
+h.senden('ort', { lat: 52.5220, lng: 13.4050, genauigkeit: 5, zeit: Date.now() + 600000 });
 g.senden('ort', { lat: 52.5230, lng: 13.4050, genauigkeit: 5, zeit: Date.now() });
 await warte(300);
 pruefe('Position trotz falscher Geräteuhr angenommen', !h.sonst.some((m) => m.typ === 'fehler'), JSON.stringify(h.sonst));
 
 h.senden('host_start');
-await warte(12000); // Alarm: verstecken (0 min) -> jagd
+await warte(1500);
+pruefe('Versteckphase läuft', h.letzterZustand?.phase === 'verstecken', h.letzterZustand?.phase);
+pruefe('Abstimmung 0/1', g.letzterZustand?.versteckAbstimmung?.fertig === 0 && g.letzterZustand?.versteckAbstimmung?.gesamt === 1,
+  JSON.stringify(g.letzterZustand?.versteckAbstimmung));
+h.senden('versteckt', { fertig: true });
+await warte(300);
+pruefe('Jäger darf nicht abstimmen', h.letzterZustand?.phase === 'verstecken');
+// Alle Verstecker fertig -> Jagd startet sofort statt nach 10 Min.
+g.senden('versteckt', { fertig: true });
+await warte(500);
 const hz = h.letzterZustand;
+pruefe('Nächste Zone bleibt geheim', hz && !('naechsteZone' in (hz.aktuelleZone ?? {})) && !('zonenPlan' in hz));
 pruefe('Phase jagd erreicht', hz?.phase === 'jagd', hz?.phase);
 const sichtAufGast = hz?.spieler?.[gast.spielerId]?.sicht?.art;
 pruefe('Host/Jäger sieht Versteckten NICHT live', sichtAufGast !== 'live', sichtAufGast);
@@ -72,14 +97,15 @@ await warte(300);
 const fa = g.sonst.find((m) => m.typ === 'faehigkeit_antwort');
 pruefe('Fähigkeit vom Server erkannt', fa && fa.nachricht !== 'Unbekannte Fähigkeit', fa?.nachricht);
 
-// Nähe-Warnung: Jäger 60 m an den Versteckten heran
+// Nähe-Warnung: Jäger 60 m an den Versteckten heran (gehend, sonst greift der Teleport-Schutz)
+await warte(2000);
 h.senden('ort', { lat: 52.52245, lng: 13.4050, genauigkeit: 5, zeit: Date.now() });
 g.senden('ort', { lat: 52.5230, lng: 13.4050, genauigkeit: 5, zeit: Date.now() });
 await warte(400);
 pruefe('Nähe-Warnung für Versteckten', g.letzterZustand?.naheGegner === true, g.letzterZustand?.naheGegner);
 
 // Fangen: Jäger auf 10 m heran
-await warte(1200);
+await warte(2000);
 h.senden('ort', { lat: 52.52291, lng: 13.4050, genauigkeit: 5, zeit: Date.now() });
 await warte(400);
 pruefe('Fangziel erkannt', h.letzterZustand?.fangZielId === gast.spielerId, h.letzterZustand?.fangZielId);
@@ -99,6 +125,44 @@ await warte(400);
 pruefe('Rolle bleibt nach Reconnect erhalten', g2.letzterZustand?.spieler?.[gast.spielerId]?.rolle === 'zuschauer', g2.letzterZustand?.spieler?.[gast.spielerId]?.rolle);
 
 h.ws.close(); g2.ws.close();
+
+// Testmodus: allein starten, Bots füllen auf, Host springt per "Tipp" zum Bot und fängt ihn
+const solo = await post('/spiele');
+const s = verbinde(solo.code, solo, 'solo');
+await s.offen;
+s.senden('hallo', { spitzname: 'Solo' });
+s.senden('host_setup', {
+  modus: 'klassisch',
+  einstellungen: { versteckZeitMinuten: 0, pingIntervallMinuten: 1, dauerMinuten: 10, testModus: true },
+  zoneMittelpunkt: { lat: 52.52, lng: 13.405 }, zonenRadiusStartMeter: 500
+});
+s.senden('ort', { lat: 52.52, lng: 13.405, genauigkeit: 5, zeit: Date.now() });
+await warte(300);
+s.senden('host_start');
+await warte(12000);
+const sz = s.letzterZustand;
+const bots = Object.values(sz?.spieler ?? {}).filter((sp) => sp.istBot);
+pruefe('Testmodus: Solo-Start mit 3 Bots', sz?.phase === 'jagd' && bots.length === 3, `${sz?.phase} ${bots.length}`);
+// Positionen der Bots sieht der Jäger nicht -> Fangtest über einen Bot, den der Server kennt: Host springt alle Bots ab
+let gefangen = 0;
+// Bots starten im Umkreis von 300 m: Raster mit 40 m Abstand absuchen (Fangradius 25 m + Genauigkeit)
+const raster = [];
+for (let dy = -320; dy <= 320; dy += 40) for (let dx = -320; dx <= 320; dx += 40) raster.push([dy, dx]);
+for (const [dy, dx] of raster) {
+  if (gefangen) break;
+  const lat = 52.52 + dy / 111320;
+  const lng = 13.405 + dx / (111320 * Math.cos((52.52 * Math.PI) / 180));
+  s.senden('ort', { lat, lng, genauigkeit: 5, zeit: Date.now() });
+  await warte(60);
+  const ziel = s.letzterZustand?.fangZielId;
+  if (ziel) {
+    s.senden('fangen', { zielId: ziel });
+    await warte(300);
+    if (s.letzterZustand?.spieler?.[ziel]?.gefangen) gefangen++;
+  }
+}
+pruefe('Testmodus: Sprünge erlaubt, Bot fangbar', gefangen === 1);
+s.ws.close();
 const fehler = ergebnisse.filter((e) => !e.ok).length;
 console.log(`\n${ergebnisse.length - fehler}/${ergebnisse.length} bestanden`);
 process.exit(fehler ? 1 : 0);

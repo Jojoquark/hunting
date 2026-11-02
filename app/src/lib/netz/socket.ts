@@ -26,6 +26,9 @@ export interface AusgehendeNachricht {
     | 'host'
     | 'host_start'
     | 'host_setup'
+    | 'host_team'
+    | 'host_teams_auto'
+    | 'versteckt'
     | 'ping';
   payload: unknown;
   zeit: number;
@@ -765,6 +768,10 @@ export class GameSocket {
     });
   }
 
+  public sendVersteckt(fertig: boolean): void {
+    this.senden('versteckt', { fertig });
+  }
+
   public sendChat(kanal: 'alle' | 'team' | 'zuschauer', text: string): void {
     this.senden('chat', { kanal, text });
   }
@@ -772,6 +779,8 @@ export class GameSocket {
   public sendHost(aktion: string, daten: Record<string, unknown> = {}): void {
     if (aktion === 'start') this.senden('host_start', daten);
     if (aktion === 'setup') this.senden('host_setup', daten);
+    if (aktion === 'team') this.senden('host_team', daten);
+    if (aktion === 'teams_auto') this.senden('host_teams_auto', daten);
   }
 }
 

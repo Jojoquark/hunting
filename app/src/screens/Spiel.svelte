@@ -95,6 +95,16 @@
   });
 
   let istVersteckphase = $derived(spielZustand.phase === 'verstecken');
+  let testModus = $derived(Boolean(spielZustand.einstellungen?.testModus));
+  // Testmodus: nach dem ersten Tipp auf die Karte zählt nur noch die getippte Position.
+  let manuellePosition = false;
+
+  function setzeTestPosition([lng, lat]: [number, number]) {
+    if (!testModus) return;
+    manuellePosition = true;
+    letzteGeoPosition = { lat, lng, genauigkeit: 5 };
+    spielNetz.sendOrt({ lat, lng, genauigkeit: 5, zeit: Date.now() });
+  }
   let faehigkeitenAktiv = $derived(Boolean(spielZustand.einstellungen?.faehigkeitenAktiv));
   // Fähigkeiten-Seite gemäß worker/src/faehigkeiten.ts
   const HIDER_FAEHIGKEITEN = ['tarnkappe', 'koeder', 'radar', 'stoersender', 'schild'];
@@ -105,6 +115,50 @@
   );
   let istMrXModus = $derived(modus === 'mrx');
   let istMrX = $derived(spielRolle === 'mrx');
+  // Rollenkarte zum Rundenstart (und erneut, wenn die Rolle wechselt, z. B. zum Zombie)
+  const ROLLEN = ['seeker', 'hider', 'zombie', 'mensch', 'mrx', 'detektiv'] as const;
+  type RollenId = (typeof ROLLEN)[number];
+  let hatServerZustand = $state(false);
+  let gesehenRolle = $state(leseGeseheneRolle());
+  let rollenInfo = $derived(
+    (ROLLEN as readonly string[]).includes(spielRolle) ? de.rollen[spielRolle as RollenId] : null
+  );
+  let zeigeRollenKarte = $derived(
+    hatServerZustand && rollenInfo !== null && gesehenRolle !== spielRolle && spielZustand.phase !== 'ende'
+  );
+  let istVerstecker = $derived(['hider', 'mensch', 'mrx'].includes(spielRolle));
+  let ichVersteckt = $derived(Boolean(spielZustand.spieler?.[spielerId]?.versteckt));
+  let abstimmung = $derived<{ fertig: number; gesamt: number }>(
+    spielZustand.versteckAbstimmung ?? { fertig: 0, gesamt: 0 }
+  );
+
+  function rollenSchluessel() {
+    return `hunting_rolle_${spielCode}_${spielerId}`;
+  }
+
+  function leseGeseheneRolle(): string | null {
+    try {
+      return localStorage.getItem(rollenSchluessel());
+    } catch {
+      return null;
+    }
+  }
+
+  function bestaetigeRolle() {
+    klang.klick();
+    gesehenRolle = spielRolle;
+    try {
+      localStorage.setItem(rollenSchluessel(), spielRolle);
+    } catch {
+      // Ohne Speicher erscheint die Karte nach einem Reload erneut.
+    }
+  }
+
+  function umschalteVersteckt() {
+    klang.klick();
+    spielNetz.sendVersteckt(!ichVersteckt);
+  }
+
   let kannFangen = $derived(spielRolle === 'seeker' || spielRolle === 'zombie' || spielRolle === 'detektiv');
 
   let letzteGeoPosition = $state<{ lat: number; lng: number; genauigkeit: number } | null>(null);
@@ -216,6 +270,7 @@
     }
 
     const unsubGeo = geoTracker.abonnieren((pos: GeoPosition) => {
+      if (manuellePosition) return;
       letzteGeoPosition = { lat: pos.lat, lng: pos.lng, genauigkeit: pos.genauigkeit };
       spielNetz.sendOrt({
         lat: pos.lat,
@@ -235,6 +290,7 @@
           return;
         }
         if (!daten.spieler) return;
+        hatServerZustand = true;
         const ich = daten.spieler[spielerId];
         const vorherigeRolle = spielRolle;
         if (ich?.rolle) spielRolle = ich.rolle;
@@ -277,7 +333,10 @@
           onSpielEnde(siegerMap[daten.sieger] || daten.sieger || 'Unbekannt');
         }
       } else if (msg.typ === 'ereignis') {
-        if (msg.daten.typ === 'ping') {
+        if (msg.daten.typ === 'phase' && msg.daten.phase === 'jagd') {
+          klang.zonenWarnung();
+          zeigeToast('Die Jagd beginnt!');
+        } else if (msg.daten.typ === 'ping') {
           klang.radarPing();
         } else if (msg.daten.typ === 'zone') {
           klang.zonenWarnung();
@@ -363,6 +422,7 @@
     eigenePosition={letzteGeoPosition}
     pings={spielZustand.pings || []}
     loot={spielZustand.loot || []}
+    onklick={setzeTestPosition}
   />
   <div class="hud-overlay">
   <!-- 1. OBERER SCHWEBENDER HUD-BEREICH -->
@@ -423,6 +483,10 @@
     </div>
   </div>
 
+  {#if testModus}
+    <div class="test-hinweis" role="status">TESTMODUS · Tippe auf die Karte, um dich zu bewegen</div>
+  {/if}
+
   <!-- 2. WARNUNGEN (VERBINDUNG / ZONENVERLASS / FUNKLOCH / GEGNER NÄHE) -->
   {#if verbindungsStatus === 'reconnect' || verbindungsStatus === 'nicht_erreichbar'}
     <div class="warn-banner funkloch-warnung" role="status">
@@ -471,7 +535,26 @@
   {/if}
 
   <!-- 4. UNTERE SCHWEBENDE AKTIONSKAPSEL -->
+  {#if istVersteckphase && abstimmung.gesamt > 0}
+    <div class="versteck-status" role="status">
+      {de.versteck.status.replace('%s', String(abstimmung.fertig)).replace('%s', String(abstimmung.gesamt))}
+    </div>
+  {/if}
+
   <footer class="glas-container aktions-kapsel">
+    {#if istVersteckphase && istVerstecker}
+      <button
+        type="button"
+        class="aktions-knopf versteckt-knopf"
+        class:bereit={ichVersteckt}
+        aria-pressed={ichVersteckt}
+        onclick={umschalteVersteckt}
+      >
+        <span class="fang-symbol">{ichVersteckt ? '✓' : '◎'}</span>
+        <span>{ichVersteckt ? de.versteck.zurueck : de.versteck.fertig}</span>
+      </button>
+    {/if}
+
     {#if kannFangen}
       <button
         type="button"
@@ -528,6 +611,23 @@
     </button>
 
   </footer>
+
+  <!-- 4b. ROLLENKARTE ZUM RUNDENSTART -->
+  {#if zeigeRollenKarte && rollenInfo}
+    <div class="rollen-overlay" role="dialog" aria-modal="true" aria-labelledby="rollen-titel">
+      <div class="rollen-karte">
+        <div class="rollen-label">{de.rollen.titel}</div>
+        <h2 id="rollen-titel" class="rollen-name rolle-{spielRolle}">{rollenInfo.name}</h2>
+        <p class="rollen-ziel">{rollenInfo.ziel}</p>
+        <ul class="rollen-regeln">
+          {#each rollenInfo.regeln as regel}
+            <li>{regel}</li>
+          {/each}
+        </ul>
+        <button type="button" class="rollen-knopf" onclick={bestaetigeRolle}>{de.rollen.verstanden}</button>
+      </div>
+    </div>
+  {/if}
 
   <!-- 5. MODAL SHEETS -->
   {#if offenesSheet !== 'keins'}
@@ -1042,6 +1142,139 @@
     font-weight: 700;
     border-radius: 10px;
     padding: 1px 5px;
+  }
+
+  .aktions-knopf.versteckt-knopf {
+    flex: 1.4;
+    background: var(--akzent);
+    color: #0a0a0c;
+    font-weight: 800;
+  }
+
+  .aktions-knopf.versteckt-knopf.bereit {
+    background: #1e1e26;
+    color: var(--tinte-2);
+    font-weight: 600;
+  }
+
+  .test-hinweis {
+    align-self: center;
+    margin-top: 8px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: rgba(143, 227, 58, 0.15);
+    border: 1px solid rgba(143, 227, 58, 0.5);
+    color: #8fe33a;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+  }
+
+  .versteck-status {
+    align-self: center;
+    margin-top: auto;
+    margin-bottom: 8px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: rgba(10, 10, 12, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--tinte);
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+
+  /* 4b. ROLLENKARTE */
+  .rollen-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(5, 5, 7, 0.82);
+    pointer-events: auto;
+  }
+
+  .rollen-karte {
+    width: 100%;
+    max-width: 420px;
+    background: var(--flaeche);
+    border: 1px solid var(--flaeche-rand);
+    border-radius: var(--radius-l);
+    padding: 24px 20px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    animation: rollenEin 320ms var(--feder-aus) both;
+  }
+
+  @keyframes rollenEin {
+    from { opacity: 0; transform: translateY(12px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rollen-karte { animation: none; }
+  }
+
+  .rollen-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--tinte-2);
+  }
+
+  .rollen-name {
+    margin: 0;
+    font-family: var(--font-headline);
+    font-size: clamp(2rem, 9vw, 2.6rem);
+    line-height: 1.05;
+  }
+
+  .rollen-name.rolle-seeker,
+  .rollen-name.rolle-detektiv { color: var(--rolle-jaeger); }
+  .rollen-name.rolle-hider,
+  .rollen-name.rolle-mensch,
+  .rollen-name.rolle-mrx { color: var(--rolle-gejagt); }
+  .rollen-name.rolle-zombie { color: var(--rolle-zombie); }
+
+  .rollen-ziel {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--tinte);
+  }
+
+  .rollen-regeln {
+    margin: 0;
+    padding-left: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--tinte-2);
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+
+  .rollen-knopf {
+    margin-top: 8px;
+    height: 52px;
+    border: none;
+    border-radius: 16px;
+    background: var(--akzent);
+    color: #0a0a0c;
+    font-size: 1rem;
+    font-weight: 800;
+    cursor: pointer;
+  }
+
+  .rollen-knopf:active {
+    transform: scale(0.97);
   }
 
   /* 5. MODAL SHEETS */

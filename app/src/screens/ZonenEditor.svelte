@@ -33,7 +33,7 @@
   let radius = $state(1000);
   let stufen = $state(4);
   let faktor = $state(0.65);
-  let aktiveVorschauStufe = $state(1);
+  let karteBereit = $state(false);
 
   let initialisiert = false;
   $effect(() => {
@@ -72,33 +72,6 @@
       },
       properties: {}
     };
-  }
-
-  // Berechnet deterministische Stufenkreise nach §5.3
-  function berechneStufenVorschau() {
-    const kreise: { stufe: number; mitte: [number, number]; r: number }[] = [];
-    let curM = zonenMitte;
-    let curR = radius;
-
-    kreise.push({ stufe: 1, mitte: curM, r: curR });
-
-    for (let i = 2; i <= stufen; i++) {
-      const nextR = curR * faktor;
-      // Deterministischer Versatz zur Demonstration der Schachtelung
-      const maxVersatz = (curR - nextR) * 0.7;
-      const winkel = (i * 137.5 * Math.PI) / 180; // Goldener Winkel für natürliche Verteilung
-      const dx = maxVersatz * Math.sin(winkel);
-      const dy = maxVersatz * Math.cos(winkel);
-
-      const deltaLat = dy / 111320;
-      const deltaLng = dx / (111320 * Math.cos((curM[1] * Math.PI) / 180));
-
-      const nextM: [number, number] = [curM[0] + deltaLng, curM[1] + deltaLat];
-      kreise.push({ stufe: i, mitte: nextM, r: nextR });
-      curM = nextM;
-      curR = nextR;
-    }
-    return kreise;
   }
 
   onMount(() => {
@@ -153,24 +126,7 @@
           'line-width': 3
         }
       });
-
-      // Stufen-Vorschau Source
-      karte.addSource('editor-stufen', {
-        type: 'geojson',
-        data: erzeugeStufenGeoJSON()
-      });
-
-      karte.addLayer({
-        id: 'editor-stufen-linie',
-        type: 'line',
-        source: 'editor-stufen',
-        paint: {
-          'line-color': '#ff5c00',
-          'line-width': 1.5,
-          'line-dasharray': [4, 3],
-          'line-opacity': 0.6
-        }
-      });
+      karteBereit = true;
     });
 
     if (!initialMitteManuell && 'geolocation' in navigator) {
@@ -190,27 +146,11 @@
     karte?.remove();
   });
 
-  function erzeugeStufenGeoJSON() {
-    const stufenKreise = berechneStufenVorschau().slice(1);
-    const features = stufenKreise.map(k => erzeugeKreisGeoJSON(k.mitte, k.r));
-    return {
-      type: 'FeatureCollection' as const,
-      features
-    };
-  }
-
+  // Nur die Startzone zeigen: wie sie schrumpft, legt der Server erst beim Start zufällig fest.
   $effect(() => {
-    if (!karte || !karte.isStyleLoaded()) return;
-
-    const srcZone = karte.getSource('editor-zone') as maplibregl.GeoJSONSource | undefined;
-    if (srcZone) {
-      srcZone.setData(erzeugeKreisGeoJSON(zonenMitte, radius));
-    }
-
-    const srcStufen = karte.getSource('editor-stufen') as maplibregl.GeoJSONSource | undefined;
-    if (srcStufen) {
-      srcStufen.setData(erzeugeStufenGeoJSON());
-    }
+    const kreis = erzeugeKreisGeoJSON(zonenMitte, radius);
+    if (!karteBereit || !karte) return;
+    (karte.getSource('editor-zone') as maplibregl.GeoJSONSource | undefined)?.setData(kreis);
   });
 
   function speichereZone() {
