@@ -29,6 +29,12 @@
     zeitpunkt: number;
   }
 
+  export interface WegLinie {
+    id: string;
+    farbe: string;
+    punkte: [number, number][]; // [lng, lat]
+  }
+
   export interface LootMarker {
     id: string;
     lat: number;
@@ -43,8 +49,10 @@
     spieler?: SpielerMarker[];
     pings?: PingMarker[];
     loot?: LootMarker[];
+    wege?: WegLinie[];
     eigenePosition?: { lat: number; lng: number; genauigkeit: number } | null;
     interaktiv?: boolean;
+    werkzeuge?: boolean;
     onklick?: (coords: [number, number]) => void;
   }
 
@@ -55,8 +63,10 @@
     spieler = [],
     pings = [],
     loot = [],
+    wege = [],
     eigenePosition = null,
     interaktiv = true,
+    werkzeuge = true,
     onklick
   }: Props = $props();
 
@@ -166,6 +176,20 @@
         }
       });
 
+      // Zurückgelegte Wege (nur im Replay belegt)
+      karte.addSource('wege', { type: 'geojson', data: leer });
+      karte.addLayer({
+        id: 'wege-linie',
+        type: 'line',
+        source: 'wege',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': ['get', 'farbe'],
+          'line-width': 3,
+          'line-opacity': 0.75
+        }
+      });
+
       karteBereit = true;
     });
 
@@ -201,6 +225,21 @@
     }
     (karte.getSource('zone-aktuell') as maplibregl.GeoJSONSource | undefined)?.setData(aktuell);
     (karte.getSource('zone-naechste') as maplibregl.GeoJSONSource | undefined)?.setData(naechste);
+  });
+
+  $effect(() => {
+    const daten = {
+      type: 'FeatureCollection' as const,
+      features: wege
+        .filter((w) => w.punkte.length >= 2)
+        .map((w) => ({
+          type: 'Feature' as const,
+          geometry: { type: 'LineString' as const, coordinates: w.punkte },
+          properties: { farbe: w.farbe }
+        }))
+    };
+    if (!karteBereit || !karte) return;
+    (karte.getSource('wege') as maplibregl.GeoJSONSource | undefined)?.setData(daten);
   });
 
   // Reaktivität für Marker (gleiche Regel: Abhängigkeiten zuerst lesen)
@@ -339,6 +378,7 @@
   <div bind:this={kartenContainer} class="maplibre-container"></div>
 
   <!-- Schwebende Navigationskapsel (Apple Liquid Glass) -->
+  {#if werkzeuge}
   <div class="karten-werkzeuge">
     <GlasKapsel variante="kapsel">
       <button class="werkzeug-knopf" onclick={zentriereAufEigen} aria-label="Eigener Standort">
@@ -350,6 +390,7 @@
       </button>
     </GlasKapsel>
   </div>
+  {/if}
 </div>
 
 <style>

@@ -1,4 +1,5 @@
 import { baueSpielWsUrl, ermittleBasisWsUrl } from './config.js';
+import { leseKonto } from './konto';
 
 export type VerbindungsStatus =
   | 'getrennt'
@@ -721,7 +722,9 @@ export class GameSocket {
     token: string = '',
     rolle: string = 'hider'
   ): void {
-    const payload = { id: this.spielerId, spitzname, icon, farbe, rolle, token };
+    // Angemeldete Spieler verknüpfen ihr Konto, damit die Runde in ihrer Statistik landet.
+    const konto = leseKonto();
+    const payload = { id: this.spielerId, spitzname, icon, farbe, rolle, token, konto: konto ?? undefined };
     this.letzteHallo = { typ: 'hallo', payload, zeit: Date.now() };
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.senden('hallo', payload);

@@ -15,6 +15,7 @@ import { nutzeFaehigkeit } from './faehigkeiten';
 import { spawneLootPunkt, pruefeLootEinsammeln } from './loot';
 import { erstelleZonenPlan, berechneAktuelleZone } from '../../shared/src/zone';
 import { zufaelligerPunktInKreis } from './geo';
+import { normalisiereName, pruefeName } from './Konto';
 import {
   hasheZugangstoken,
   istGueltigePosition,
@@ -366,7 +367,10 @@ export class GameRoom {
       if (code !== this.zustand.code) return new Response('Spiel nicht gefunden', { status: 404 });
       const cutoff = Date.now() - GameRoom.POSITIONS_AUFBEWAHRUNG_MS;
       this.state.storage.sql.exec(`DELETE FROM positionen_replay WHERE aufgenommen_um < ?`, cutoff);
-      return erstelleReplayDeaktiviertAntwort();
+      if (this.zustand.phase !== 'ende' || this.zustand.datenBereinigt) {
+        return new Response('Das Replay gibt es erst nach Spielende', { status: 409 });
+      }
+      return Response.json(this.erstelleReplay());
     }
 
     const code = url.pathname.match(/\/spiele\/([A-Za-z0-9]{4,8})$/)?.[1]?.toUpperCase();
@@ -515,6 +519,8 @@ export class GameRoom {
           if (this.zustand.phase === 'lobby') sp.rolle = this.rolleFuerSpieler(id);
         }
 
+        await this.verknuepfeKonto(sp, aktion.konto);
+
         ws.send(JSON.stringify({
           typ: 'hallo_antwort',
           zeit: this.zustand.jetzt,
@@ -550,10 +556,16 @@ export class GameRoom {
           }
         }
 
+        if (sp.position && (this.zustand.phase === 'verstecken' || this.zustand.phase === 'jagd')) {
+          const schritt = haversineDistanz(sp.position, pos);
+          // Unter 3 m ist GPS-Rauschen, große Sprünge (Testmodus) zählen nicht als gelaufen.
+          if (schritt >= 3 && schritt < 500) this.statistikVon(sp).distanzMeter += schritt;
+        }
         sp.position = pos;
         sp.letztesUpdateZeit = this.zustand.jetzt;
+        this.zeichneWegpunktAuf(sp);
 
-        // Alte Replay-Punkte aus früheren Versionen regelmäßig entfernen; neue Punkte werden nicht gespeichert.
+        // Replay-Punkte älter als die Aufbewahrungsfrist entfernen.
         const replayCutoff = this.zustand.jetzt - GameRoom.POSITIONS_AUFBEWAHRUNG_MS;
         this.state.storage.sql.exec(`DELETE FROM positionen_replay WHERE aufgenommen_um < ?`, replayCutoff);
 
@@ -577,6 +589,7 @@ export class GameRoom {
                 } else if (this.zustand.modus === 'klassisch') {
                   sp.rolle = 'zuschauer';
                 }
+                this.protokolliere('ausgeschieden', { ziel: sp.id });
                 this.pruefeSieg();
               }
             }
@@ -655,6 +668,8 @@ export class GameRoom {
         }
 
         // Fang vollziehen
+        this.statistikVon(faenger).faenge++;
+        this.protokolliere('fang', { faenger: faenger.id, ziel: ziel.id });
         if (this.zustand.modus === 'zombie') {
           verwandleInZombie(ziel, faenger, this.zustand);
         } else {
@@ -707,6 +722,8 @@ export class GameRoom {
         const gueltig = await this.verifiziereQrToken(zielId, token, secret);
 
         if (gueltig) {
+          this.statistikVon(faenger).faenge++;
+          this.protokolliere('fang', { faenger: faenger.id, ziel: ziel.id });
           if (this.zustand.modus === 'zombie') {
             verwandleInZombie(ziel, faenger, this.zustand);
           } else {
@@ -734,6 +751,7 @@ export class GameRoom {
         const res = nutzeFaehigkeit(sp, aktion.faehigkeitId, aktion.parameter, this.zustand);
         ws.send(JSON.stringify({ typ: 'faehigkeit_antwort', ...res }));
         if (res.erfolg) {
+          this.protokolliere('faehigkeit', { spieler: sp.id, faehigkeit: aktion.faehigkeitId });
           await this.speichereZustand();
           this.verteileZustand();
         }
@@ -746,6 +764,7 @@ export class GameRoom {
         if (!sp || sp.rolle !== 'mrx') return;
 
         const res = loeseTicket(sp, aktion.ticketTyp, aktion.linie, aktion.haltestelle, this.zustand);
+        this.protokolliere('ticket', { spieler: sp.id, ticket: aktion.ticketTyp, linie: aktion.linie ?? null });
         await this.speichereZustand();
         this.verteileZustand();
         break;
@@ -893,6 +912,7 @@ export class GameRoom {
         this.fuehrePingAus();
         this.planeNaechstenPing();
         this.broadcastEreignis({ typ: 'ping' });
+        this.protokolliere('ping', {});
       }
 
       // 1b. Zone nach Plan verkleinern
@@ -976,6 +996,7 @@ export class GameRoom {
       sp.position = { ...ziel, genauigkeit: 5, zeit: this.zustand.jetzt };
       sp.letztesUpdateZeit = this.zustand.jetzt;
       sp.ausserhalbZone = false;
+      this.zeichneWegpunktAuf(sp);
     }
   }
 
@@ -1004,6 +1025,119 @@ export class GameRoom {
     this.planeNaechstenPing();
     this.erstelleZonenPlanFuerJagd();
     this.broadcastEreignis({ typ: 'phase', phase: 'jagd' });
+    this.protokolliere('phase', { phase: 'jagd' });
+    this.protokolliereZone();
+  }
+
+  // ---------- Replay und Statistik ----------
+
+  private statistikVon(sp: Spieler): { distanzMeter: number; faenge: number } {
+    sp.statistik ??= { distanzMeter: 0, faenge: 0 };
+    return sp.statistik;
+  }
+
+  private protokolliere(typ: string, daten: Record<string, unknown>): void {
+    this.state.storage.sql.exec(
+      `INSERT INTO ereignisse (typ, daten, zeit) VALUES (?, ?, ?)`,
+      typ, JSON.stringify(daten), this.zustand.jetzt
+    );
+  }
+
+  private protokolliereZone(): void {
+    const zone = this.zustand.aktuelleZone;
+    if (this.zustand.letzterProtokollRadius !== undefined &&
+      Math.abs(this.zustand.letzterProtokollRadius - zone.radiusMeter) < 1) return;
+    this.zustand.letzterProtokollRadius = zone.radiusMeter;
+    this.protokolliere('zone', { lat: zone.mittelpunkt.lat, lng: zone.mittelpunkt.lng, radius: Math.round(zone.radiusMeter) });
+  }
+
+  // Höchstens ein Wegpunkt alle 10 Sek. pro Spieler, nur während der Runde.
+  private zeichneWegpunktAuf(sp: Spieler): void {
+    if (!sp.position || (this.zustand.phase !== 'verstecken' && this.zustand.phase !== 'jagd')) return;
+    if (sp.letzteReplayAufnahme && this.zustand.jetzt - sp.letzteReplayAufnahme < 10000) return;
+    sp.letzteReplayAufnahme = this.zustand.jetzt;
+    this.state.storage.sql.exec(
+      `INSERT INTO positionen_replay (spieler_id, lat, lng, zeit, aufgenommen_um) VALUES (?, ?, ?, ?, ?)`,
+      sp.id, sp.position.lat, sp.position.lng, this.zustand.jetzt, this.zustand.jetzt
+    );
+  }
+
+  private erstelleReplay() {
+    const wege: Record<string, Array<[number, number, number]>> = {};
+    for (const row of this.state.storage.sql.exec(
+      `SELECT spieler_id, lat, lng, zeit FROM positionen_replay ORDER BY zeit`
+    ).toArray()) {
+      const id = String(row.spieler_id);
+      (wege[id] ??= []).push([Number(row.zeit), Number(row.lat), Number(row.lng)]);
+    }
+    const ereignisse = this.state.storage.sql.exec(`SELECT typ, daten, zeit FROM ereignisse ORDER BY zeit`).toArray()
+      .map((row) => ({ zeit: Number(row.zeit), typ: String(row.typ), daten: JSON.parse(String(row.daten || '{}')) }));
+    return {
+      code: this.zustand.code,
+      modus: this.zustand.modus,
+      start: this.zustand.spielStartZeit ?? ereignisse[0]?.zeit ?? 0,
+      ende: this.zustand.beendetUm ?? this.zustand.jetzt,
+      sieger: this.zustand.sieger,
+      spieler: Object.values(this.zustand.spieler).map((sp) => ({
+        id: sp.id, name: sp.spitzname, rolle: sp.rolle, istBot: Boolean(sp.istBot)
+      })),
+      wege,
+      ereignisse,
+      auswertung: this.zustand.auswertung ?? []
+    };
+  }
+
+  private schliesseSpielAb(): void {
+    const sieger = this.zustand.sieger;
+    const faengerGewinnt = sieger === 'seeker' || sieger === 'zombie' || sieger === 'detektiv';
+    const jagdStart = this.zustand.phasenStartZeit;
+    const ende = this.zustand.beendetUm ?? this.zustand.jetzt;
+    this.zustand.auswertung = Object.values(this.zustand.spieler).map((sp) => {
+      const istFaenger = ['seeker', 'zombie', 'detektiv'].includes(sp.rolle);
+      // Wer als Fänger begonnen hat, hat keine „überlebte Zeit“; verwandelte Zombies schon.
+      const warGejagt = !istFaenger || sp.gefangenUm !== undefined;
+      return {
+        id: sp.id,
+        name: sp.spitzname,
+        rolle: sp.rolle,
+        team: istFaenger ? 'faenger' : 'gejagt',
+        gewonnen: istFaenger === faengerGewinnt,
+        distanzMeter: Math.round(sp.statistik?.distanzMeter ?? 0),
+        faenge: sp.statistik?.faenge ?? 0,
+        ueberlebtSekunden: warGejagt ? Math.max(0, Math.round(((sp.gefangenUm ?? ende) - jagdStart) / 1000)) : null,
+        istBot: Boolean(sp.istBot)
+      };
+    });
+    this.protokolliere('phase', { phase: 'ende', sieger });
+
+    // Ergebnisse an verknüpfte Konten melden (je Spielcode nur einmal gezählt)
+    const kontoNamespace = this.env?.KONTO as DurableObjectNamespace | undefined;
+    if (!kontoNamespace) return;
+    for (const sp of Object.values(this.zustand.spieler)) {
+      const eintrag = this.zustand.auswertung.find((a) => a.id === sp.id);
+      if (!sp.kontoName || !eintrag) continue;
+      const stub = kontoNamespace.get(kontoNamespace.idFromName(normalisiereName(sp.kontoName)));
+      this.state.waitUntil(stub.fetch('https://konto/ergebnis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spielCode: this.zustand.code, modus: this.zustand.modus, zeit: ende, ...eintrag })
+      }).catch(() => undefined));
+    }
+  }
+
+  private async verknuepfeKonto(sp: Spieler, konto: unknown): Promise<void> {
+    if (!konto || typeof konto !== 'object') return;
+    const { name, token } = konto as { name?: unknown; token?: unknown };
+    if (pruefeName(name) || typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return;
+    const kontoNamespace = this.env?.KONTO as DurableObjectNamespace | undefined;
+    if (!kontoNamespace) return;
+    try {
+      const res = await kontoNamespace.get(kontoNamespace.idFromName(normalisiereName(name as string)))
+        .fetch('https://konto/pruefen', { method: 'POST', body: JSON.stringify({ token }) });
+      if (res.ok) sp.kontoName = ((await res.json()) as { name: string }).name;
+    } catch {
+      // Ohne Kontoprüfung spielt der Spieler anonym weiter.
+    }
   }
 
   private istVerstecker(sp: Spieler): boolean {
@@ -1045,6 +1179,7 @@ export class GameRoom {
         : undefined
     };
     this.zustand.zonenStatus = status.status;
+    this.protokolliereZone();
     if (status.status !== 'stabil' && status.status !== vorherigerStatus) {
       this.broadcastEreignis({ typ: 'zone', status: status.status });
     }
@@ -1086,6 +1221,7 @@ export class GameRoom {
         }
       }
     }
+    if (this.zustand.phase === 'ende' && !this.zustand.auswertung) this.schliesseSpielAb();
   }
 
   // Ein gerade geschlossener Socket darf die Verteilung an alle anderen nicht abbrechen.
@@ -1183,7 +1319,8 @@ export class GameRoom {
         ])
       ),
       lootPunkte: this.zustand.lootPunkte,
-      sieger: this.zustand.sieger
+      sieger: this.zustand.sieger,
+      auswertung: this.zustand.phase === 'ende' ? this.zustand.auswertung ?? [] : undefined
     };
   }
 
@@ -1201,6 +1338,12 @@ export class GameRoom {
   private async starteSpiel(): Promise<void> {
     this.zustand.phase = 'verstecken';
     this.zustand.phasenStartZeit = Date.now();
+    this.zustand.spielStartZeit = this.zustand.phasenStartZeit;
+    this.zustand.jetzt = this.zustand.phasenStartZeit;
+    this.state.storage.sql.exec(`DELETE FROM positionen_replay`);
+    this.state.storage.sql.exec(`DELETE FROM ereignisse`);
+    this.protokolliere('phase', { phase: 'verstecken' });
+    for (const sp of Object.values(this.zustand.spieler)) this.zeichneWegpunktAuf(sp);
     await this.state.storage.setAlarm(Date.now() + 1000);
   }
 

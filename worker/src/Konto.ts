@@ -66,6 +66,17 @@ export class Konto {
         token_hash TEXT PRIMARY KEY,
         ablauf INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS ergebnisse (
+        spiel_code TEXT PRIMARY KEY,
+        modus TEXT NOT NULL,
+        rolle TEXT NOT NULL,
+        team TEXT NOT NULL,
+        gewonnen INTEGER NOT NULL,
+        distanz_meter INTEGER NOT NULL,
+        faenge INTEGER NOT NULL,
+        ueberlebt_sekunden INTEGER,
+        zeit INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS fehlversuche (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         start INTEGER NOT NULL,
@@ -107,11 +118,70 @@ export class Konto {
     }
   }
 
+  private statistik(name: string) {
+    const gesamt = this.state.storage.sql.exec(`
+      SELECT COUNT(*) AS spiele,
+             COALESCE(SUM(gewonnen), 0) AS siege,
+             COALESCE(SUM(CASE WHEN team = 'faenger' AND gewonnen = 1 THEN 1 ELSE 0 END), 0) AS siege_faenger,
+             COALESCE(SUM(CASE WHEN team = 'gejagt' AND gewonnen = 1 THEN 1 ELSE 0 END), 0) AS siege_gejagt,
+             COALESCE(SUM(distanz_meter), 0) AS distanz_meter,
+             COALESCE(SUM(faenge), 0) AS faenge,
+             COALESCE(MAX(ueberlebt_sekunden), 0) AS laengstes_ueberleben
+      FROM ergebnisse`).toArray()[0] ?? {};
+    const letzte = this.state.storage.sql.exec(
+      `SELECT spiel_code, modus, rolle, team, gewonnen, distanz_meter, faenge, ueberlebt_sekunden, zeit
+       FROM ergebnisse ORDER BY zeit DESC LIMIT 10`
+    ).toArray().map((row) => ({
+      spielCode: String(row.spiel_code),
+      modus: String(row.modus),
+      rolle: String(row.rolle),
+      team: String(row.team),
+      gewonnen: Number(row.gewonnen) === 1,
+      distanzMeter: Number(row.distanz_meter),
+      faenge: Number(row.faenge),
+      ueberlebtSekunden: row.ueberlebt_sekunden === null ? null : Number(row.ueberlebt_sekunden),
+      zeit: Number(row.zeit)
+    }));
+    return {
+      name,
+      spiele: Number(gesamt.spiele ?? 0),
+      siege: Number(gesamt.siege ?? 0),
+      siegeFaenger: Number(gesamt.siege_faenger ?? 0),
+      siegeGejagt: Number(gesamt.siege_gejagt ?? 0),
+      distanzMeter: Number(gesamt.distanz_meter ?? 0),
+      faenge: Number(gesamt.faenge ?? 0),
+      laengstesUeberlebenSekunden: Number(gesamt.laengstes_ueberleben ?? 0),
+      letzte
+    };
+  }
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const body = request.method === 'POST'
-      ? await request.json().catch(() => ({})) as { name?: string; passwort?: string; token?: string }
-      : {};
+      ? await request.json().catch(() => ({})) as { name?: string; passwort?: string; token?: string } & Record<string, unknown>
+      : {} as Record<string, unknown> & { name?: string; passwort?: string; token?: string };
+
+    // Intern vom GameRoom: Ergebnis einer beendeten Runde. Nicht über den öffentlichen Router erreichbar.
+    if (url.pathname === '/ergebnis') {
+      if (!this.konto()) return new Response('Kein Konto', { status: 404 });
+      const zahl = (wert: unknown) => (Number.isFinite(wert) ? Math.max(0, Math.round(wert as number)) : 0);
+      const code = typeof body.spielCode === 'string' && /^[A-Z0-9]{4,8}$/.test(body.spielCode) ? body.spielCode : '';
+      if (!code) return new Response('Ungültiges Ergebnis', { status: 400 });
+      this.state.storage.sql.exec(
+        `INSERT OR IGNORE INTO ergebnisse (spiel_code, modus, rolle, team, gewonnen, distanz_meter, faenge, ueberlebt_sekunden, zeit)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        code,
+        String(body.modus ?? 'klassisch').slice(0, 16),
+        String(body.rolle ?? '').slice(0, 16),
+        body.team === 'faenger' ? 'faenger' : 'gejagt',
+        body.gewonnen === true ? 1 : 0,
+        zahl(body.distanzMeter),
+        zahl(body.faenge),
+        body.ueberlebtSekunden === null ? null : zahl(body.ueberlebtSekunden),
+        zahl(body.zeit) || Date.now()
+      );
+      return new Response(null, { status: 204 });
+    }
 
     if (url.pathname === '/registrieren') {
       if (this.konto()) return new Response('Benutzername ist schon vergeben', { status: 409 });
@@ -143,7 +213,7 @@ export class Konto {
       return Response.json({ name: konto.anzeigename, token: await this.neueSitzung() });
     }
 
-    if (url.pathname === '/pruefen' || url.pathname === '/abmelden') {
+    if (url.pathname === '/pruefen' || url.pathname === '/abmelden' || url.pathname === '/statistik') {
       const konto = this.konto();
       const token = typeof body.token === 'string' && /^[a-f0-9]{64}$/.test(body.token) ? body.token : '';
       if (!konto || !token) return new Response('Nicht angemeldet', { status: 401 });
@@ -154,6 +224,7 @@ export class Konto {
         this.state.storage.sql.exec(`DELETE FROM sitzungen WHERE token_hash = ?`, tokenHash);
         return new Response(null, { status: 204 });
       }
+      if (url.pathname === '/statistik') return Response.json(this.statistik(konto.anzeigename));
       return Response.json({ name: konto.anzeigename });
     }
 

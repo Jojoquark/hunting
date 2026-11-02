@@ -6,6 +6,7 @@
   import { klang } from '../lib/klang/sound';
   import Icon from '../lib/ui/Icon.svelte';
   import Karte from '../lib/karte/Karte.svelte';
+  import type { Auswertung } from './Ende.svelte';
 
   // Props über Svelte 5 $props()
   interface Props {
@@ -17,7 +18,7 @@
     rolle?: string;
     modus?: string;
     onGefangen?: () => void;
-    onSpielEnde?: (sieger: string) => void;
+    onSpielEnde?: (sieger: string, auswertung: Auswertung[]) => void;
   }
 
   let {
@@ -29,7 +30,7 @@
     rolle = 'hider', // 'seeker' | 'hider' | 'zombie' | 'mrx' | 'detektiv' | 'zuschauer'
     modus = 'klassisch', // 'klassisch' | 'zombie' | 'mrx'
     onGefangen = () => {},
-    onSpielEnde = (sieger: string) => {},
+    onSpielEnde = (_sieger: string, _auswertung: Auswertung[]) => {},
   }: Props = $props();
 
   let spielRolle = $state(untrack(() => rolle));
@@ -330,7 +331,7 @@
             mensch: 'menschen',
             detektiv: 'detektive'
           };
-          onSpielEnde(siegerMap[daten.sieger] || daten.sieger || 'Unbekannt');
+          onSpielEnde(siegerMap[daten.sieger] || daten.sieger || 'Unbekannt', daten.auswertung ?? []);
         }
       } else if (msg.typ === 'ereignis') {
         if (msg.daten.typ === 'phase' && msg.daten.phase === 'jagd') {

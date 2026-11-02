@@ -27,6 +27,14 @@ function verbinde(code, sitzung, name) {
   return c;
 }
 
+// Testkonto für den Gast (zufälliger Name je Lauf, nur lokal)
+const kontoName = `e2e_${Math.random().toString(36).slice(2, 8)}`;
+const kontoRes = await fetch(`${BASIS}/konto/registrieren`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: kontoName, passwort: `pw-${Math.random().toString(36).slice(2)}` })
+});
+const konto = await kontoRes.json();
+
 const host = await post('/spiele');
 const code = host.code;
 const gast = await post(`/spiele/${code}/beitreten`);
@@ -36,7 +44,7 @@ const h = verbinde(code, host, 'host');
 const g = verbinde(code, gast, 'gast');
 await Promise.all([h.offen, g.offen]);
 h.senden('hallo', { spitzname: 'Jäger' });
-g.senden('hallo', { spitzname: 'Versteck' });
+g.senden('hallo', { spitzname: 'Versteck', konto: { name: konto.name, token: konto.token } });
 await warte(300);
 
 // Teams: Host setzt den Gast zu den Jägern -> Gejagte leer -> Start muss abgelehnt werden
@@ -115,6 +123,32 @@ const ende = h.letzterZustand;
 pruefe('Versteckter gefangen', ende?.spieler?.[gast.spielerId]?.gefangen === true);
 pruefe('Spielende mit Sieger Jäger', ende?.phase === 'ende' && ende?.sieger === 'seeker', `${ende?.phase}/${ende?.sieger}`);
 
+// Auswertung im Endzustand
+const auswertungJaeger = ende?.auswertung?.find((a) => a.id === host.spielerId);
+const auswertungGast = ende?.auswertung?.find((a) => a.id === gast.spielerId);
+pruefe('Auswertung: Jäger gewinnt mit 1 Fang', auswertungJaeger?.gewonnen === true && auswertungJaeger?.faenge === 1, JSON.stringify(auswertungJaeger));
+pruefe('Auswertung: Strecke des Jägers gezählt', auswertungJaeger?.distanzMeter > 50, auswertungJaeger?.distanzMeter);
+pruefe('Auswertung: Versteckter verliert, Zeit gemessen', auswertungGast?.gewonnen === false && typeof auswertungGast?.ueberlebtSekunden === 'number');
+
+// Replay: nur mit gültigem Zugang, enthält Wege und den Fang
+const ohneZugang = await fetch(`${BASIS}/spiele/${code}/replay`);
+pruefe('Replay ohne Zugang abgelehnt', ohneZugang.status === 401, ohneZugang.status);
+const replayRes = await fetch(`${BASIS}/spiele/${code}/replay`, {
+  headers: { 'X-Spieler-ID': gast.spielerId, Authorization: `Bearer ${gast.token}` }
+});
+const replay = replayRes.ok ? await replayRes.json() : null;
+pruefe('Replay liefert Wege beider Spieler', replay && replay.wege[host.spielerId]?.length >= 1 && replay.wege[gast.spielerId]?.length >= 1, replayRes.status);
+pruefe('Replay enthält Fang und Phasen', replay?.ereignisse.some((e) => e.typ === 'fang') && replay?.ereignisse.some((e) => e.typ === 'phase' && e.daten.phase === 'ende'));
+
+// Konto-Statistik des Gastes
+await warte(300);
+const statistikRes = await fetch(`${BASIS}/konto/statistik`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: konto.name, token: konto.token })
+});
+const statistik = statistikRes.ok ? await statistikRes.json() : null;
+pruefe('Konto-Statistik zählt die Runde', statistik?.spiele === 1 && statistik?.siege === 0 && statistik?.letzte?.[0]?.spielCode === code, JSON.stringify(statistik)?.slice(0, 120));
+
 // Reconnect nach Fang: Rolle muss Zuschauer bleiben
 g.ws.close();
 await warte(300);
@@ -147,13 +181,13 @@ pruefe('Testmodus: Solo-Start mit 3 Bots', sz?.phase === 'jagd' && bots.length =
 let gefangen = 0;
 // Bots starten im Umkreis von 300 m: Raster mit 40 m Abstand absuchen (Fangradius 25 m + Genauigkeit)
 const raster = [];
-for (let dy = -320; dy <= 320; dy += 40) for (let dx = -320; dx <= 320; dx += 40) raster.push([dy, dx]);
+for (let runde = 0; runde < 3; runde++) for (let dy = -400; dy <= 400; dy += 40) for (let dx = -400; dx <= 400; dx += 40) raster.push([dy, dx]);
 for (const [dy, dx] of raster) {
   if (gefangen) break;
   const lat = 52.52 + dy / 111320;
   const lng = 13.405 + dx / (111320 * Math.cos((52.52 * Math.PI) / 180));
   s.senden('ort', { lat, lng, genauigkeit: 5, zeit: Date.now() });
-  await warte(60);
+  await warte(95); // unter dem Server-Limit von 120 Nachrichten pro 10 s bleiben
   const ziel = s.letzterZustand?.fangZielId;
   if (ziel) {
     s.senden('fangen', { zielId: ziel });

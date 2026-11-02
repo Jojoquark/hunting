@@ -65,6 +65,10 @@ export interface Spieler {
   versteckt?: boolean;
   // Testmodus-Bot ohne echte Verbindung
   istBot?: boolean;
+  // Verknüpftes Konto (vom Konto-DO bestätigt)
+  kontoName?: string;
+  statistik?: { distanzMeter: number; faenge: number };
+  letzteReplayAufnahme?: number;
   gefangenUm?: number;
   gefangenVon?: string;
   faehigkeitenStatus: {
@@ -162,6 +166,9 @@ export interface SpielZustand {
     schrumpfEndeZeitpunkt: number;
   }>;
   zonenStatus?: 'stabil' | 'warnung' | 'schrumpft';
+  spielStartZeit?: number;
+  letzterProtokollRadius?: number;
+  auswertung?: SpielerAuswertung[];
   // Lobby: vom Host gesetzte Teamseite je Spieler; fehlt ein Eintrag, gilt die Standardseite.
   teamZuteilung?: Record<string, 'faenger' | 'gejagt'>;
   phasenStartZeit: number;
@@ -171,6 +178,19 @@ export interface SpielZustand {
   datenBereinigt?: boolean;
   letzterLootSpawn?: number;
   sieger?: 'seeker' | 'hider' | 'zombie' | 'mensch' | 'mrx' | 'detektiv';
+}
+
+export interface SpielerAuswertung {
+  id: string;
+  name: string;
+  rolle: Rolle;
+  team: 'faenger' | 'gejagt';
+  gewonnen: boolean;
+  distanzMeter: number;
+  faenge: number;
+  /** Zeit ab Jagdbeginn bis zum Fang bzw. Spielende; null für Spieler, die von Anfang an gefangen haben */
+  ueberlebtSekunden: number | null;
+  istBot: boolean;
 }
 
 export interface PushAbo {

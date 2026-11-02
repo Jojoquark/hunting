@@ -71,6 +71,36 @@ export async function pruefeKonto(): Promise<KontoSitzung | null> {
   return sitzung;
 }
 
+export interface KontoStatistik {
+  spiele: number;
+  siege: number;
+  siegeFaenger: number;
+  siegeGejagt: number;
+  distanzMeter: number;
+  faenge: number;
+  laengstesUeberlebenSekunden: number;
+  letzte: Array<{
+    spielCode: string;
+    modus: string;
+    team: string;
+    gewonnen: boolean;
+    distanzMeter: number;
+    faenge: number;
+    zeit: number;
+  }>;
+}
+
+export async function ladeStatistik(): Promise<KontoStatistik | null> {
+  const sitzung = leseKonto();
+  if (!sitzung) return null;
+  try {
+    const antwort = await sende('statistik', { name: sitzung.name, token: sitzung.token });
+    return antwort.ok ? await antwort.json() as KontoStatistik : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function kontoAbmelden(): Promise<void> {
   const sitzung = leseKonto();
   speichereKonto(null);

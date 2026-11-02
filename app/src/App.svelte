@@ -8,6 +8,8 @@
   import Gefangen from './screens/Gefangen.svelte';
   import Ende from './screens/Ende.svelte';
   import Profil from './screens/Profil.svelte';
+  import Replay from './screens/Replay.svelte';
+  import type { Auswertung } from './screens/Ende.svelte';
   import { ermittleBasisHttpUrl } from './lib/netz/config';
   import { leseKonto, pruefeKonto, type KontoSitzung } from './lib/netz/konto';
 
@@ -20,7 +22,8 @@
     | 'spiel'
     | 'gefangen'
     | 'ende'
-    | 'profil';
+    | 'profil'
+    | 'replay';
 
   // Zentraler Routing-Zustand (Svelte 5 Runes)
   let aktiverBildschirm = $state<Bildschirm>('start');
@@ -35,6 +38,7 @@
   let spielerId = $state('');
   let spielerToken = $state('');
   let letzterSieger = $state('seeker');
+  let letzteAuswertung = $state<Auswertung[]>([]);
   let serverFehler = $state('');
   let spielErstellenLaedt = $state(false);
   let gefangenGemeldet = false;
@@ -312,8 +316,9 @@
         gefangenGemeldet = true;
         navigiereZu('gefangen');
       }}
-      onSpielEnde={(sieger) => {
+      onSpielEnde={(sieger, auswertung) => {
         letzterSieger = sieger;
+        letzteAuswertung = auswertung;
         navigiereZu('ende');
       }}
     />
@@ -331,12 +336,18 @@
   {:else if aktiverBildschirm === 'ende'}
     <Ende
       sieger={letzterSieger}
+      auswertung={letzteAuswertung}
+      eigeneId={spielerId}
+      onReplay={() => navigiereZu('replay')}
       onRevanche={() => {
         verlasseSpiel();
         void handleSpielErstellen();
       }}
       onLobby={verlasseSpiel}
     />
+
+  {:else if aktiverBildschirm === 'replay'}
+    <Replay {spielCode} {spielerId} token={spielerToken} onSchliessen={() => navigiereZu('ende')} />
 
   {:else if aktiverBildschirm === 'profil'}
     <Profil

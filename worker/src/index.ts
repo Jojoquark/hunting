@@ -197,7 +197,7 @@ export default {
     }
 
     // 6. Konto: registrieren, anmelden, Sitzung prüfen, abmelden (Benutzername + Passwort)
-    const kontoMatch = url.pathname.match(/^\/konto\/(registrieren|anmelden|pruefen|abmelden)$/);
+    const kontoMatch = url.pathname.match(/^\/konto\/(registrieren|anmelden|pruefen|abmelden|statistik)$/);
     if (request.method === 'POST' && kontoMatch) {
       if (requestBodyZuGross(request)) return new Response('Anfrage zu groß', { status: 413, headers: corsHeaders });
       const aktion = kontoMatch[1];

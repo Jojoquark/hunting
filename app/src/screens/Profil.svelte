@@ -3,7 +3,7 @@
   import { de } from '../lib/i18n/de';
   import { klang } from '../lib/klang/sound';
   import { geoTracker } from '../lib/ortung/geolocation';
-  import { kontoAbmelden, kontoZugang, type KontoSitzung } from '../lib/netz/konto';
+  import { kontoAbmelden, kontoZugang, ladeStatistik, type KontoSitzung, type KontoStatistik } from '../lib/netz/konto';
 
   interface Props {
     spitzname?: string;
@@ -26,6 +26,22 @@
   let kontoPasswort = $state('');
   let kontoFehler = $state('');
   let kontoLaedt = $state(false);
+  let statistik = $state<KontoStatistik | null>(null);
+
+  // Statistik neu laden, sobald ein Konto angemeldet ist
+  $effect(() => {
+    if (!konto) {
+      statistik = null;
+      return;
+    }
+    void ladeStatistik().then((s) => (statistik = s));
+  });
+
+  const MODUS_NAMEN: Record<string, string> = { klassisch: 'Klassisch', zombie: 'Zombie', mrx: 'Mr. X' };
+
+  function km(meter: number) {
+    return (meter / 1000).toFixed(1).replace('.', ',');
+  }
 
   async function sendeKonto(event: SubmitEvent) {
     event.preventDefault();
@@ -125,6 +141,35 @@
         <p class="profil-hinweis">Optional. Ohne E-Mail: Ein vergessenes Passwort lässt sich nicht zurücksetzen.</p>
       {/if}
     </div>
+
+    {#if konto}
+      <div class="sektion">
+        <div class="sektion-label">{de.profil.statistikenTitel}</div>
+        {#if !statistik}
+          <p class="profil-hinweis">Statistik wird geladen …</p>
+        {:else if statistik.spiele === 0}
+          <p class="profil-hinweis">Noch keine Runde gespielt. Runden zählen, wenn du beim Beitreten angemeldet bist.</p>
+        {:else}
+          <div class="statistik-gitter">
+            <div class="statistik-kachel"><span class="statistik-wert tabular-nums">{statistik.spiele}</span><span>{de.profil.spieleGesamt}</span></div>
+            <div class="statistik-kachel"><span class="statistik-wert tabular-nums">{statistik.siege}</span><span>Siege</span></div>
+            <div class="statistik-kachel"><span class="statistik-wert tabular-nums">{statistik.siegeFaenger}</span><span>{de.profil.siegeSeeker}</span></div>
+            <div class="statistik-kachel"><span class="statistik-wert tabular-nums">{statistik.siegeGejagt}</span><span>{de.profil.siegeHider}</span></div>
+            <div class="statistik-kachel"><span class="statistik-wert tabular-nums">{km(statistik.distanzMeter)}</span><span>{de.profil.gesamtKm}</span></div>
+            <div class="statistik-kachel"><span class="statistik-wert tabular-nums">{statistik.faenge}</span><span>{de.profil.gesamtFaenge}</span></div>
+          </div>
+          <ul class="letzte-runden">
+            {#each statistik.letzte as runde (runde.spielCode)}
+              <li>
+                <span class="runden-ergebnis" class:sieg={runde.gewonnen}>{runde.gewonnen ? 'Sieg' : 'Niederlage'}</span>
+                <span>{MODUS_NAMEN[runde.modus] ?? runde.modus} · {runde.team === 'faenger' ? 'Fänger' : 'Gejagt'}</span>
+                <span class="tabular-nums">{km(runde.distanzMeter)} km · {runde.faenge} Fänge</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
 
     <!-- SPITZNAME -->
     <div class="sektion">
@@ -317,6 +362,58 @@
 
   .konto-knopf:disabled {
     opacity: 0.6;
+  }
+
+  .statistik-gitter {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .statistik-kachel {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: #131318;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 10px 12px;
+    font-size: 0.72rem;
+    color: #a3a3ad;
+  }
+
+  .statistik-wert {
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: #f2f2ee;
+  }
+
+  .letzte-runden {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.78rem;
+    color: #a3a3ad;
+  }
+
+  .letzte-runden li {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .runden-ergebnis {
+    font-weight: 700;
+    color: #ff3b5c;
+  }
+
+  .runden-ergebnis.sieg {
+    color: #ff5c00;
   }
 
   .schalter-liste {
