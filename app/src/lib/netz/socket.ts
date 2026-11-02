@@ -20,21 +20,25 @@ export interface AusgehendeNachricht {
     | 'ort'
     | 'fangen'
     | 'fangAntwort'
-    | 'qrFang'
     | 'faehigkeit'
     | 'ticket'
     | 'chat'
     | 'host'
+    | 'host_start'
+    | 'host_setup'
     | 'ping';
   payload: unknown;
   zeit: number;
 }
 
-export interface EingehendeNachricht {
-  typ: 'zustand' | 'ereignis' | 'sicht' | 'zeit' | 'pong' | 'fehler';
-  daten: unknown;
-  zeit?: number;
-}
+export type EingehendeNachricht =
+  | { typ: 'zustand'; daten: Record<string, any> }
+  | { typ: 'ereignis'; daten: { typ: string; [key: string]: any } }
+  | { typ: 'sicht'; daten: unknown }
+  | { typ: 'zeit'; daten: { serverZeit?: number } }
+  | { typ: 'pong'; daten: { serverZeit?: number }; zeit?: number }
+  | { typ: 'fehler'; daten: { code?: string; nachricht?: string; kannDemo?: boolean } }
+  | { typ: 'fang_abgelehnt'; grund?: string; daten?: unknown };
 
 export type NachrichtenHandler = (msg: EingehendeNachricht) => void;
 
@@ -71,6 +75,7 @@ export class GameSocket {
 
   private offlineWarteschlange: AusgehendeNachricht[] = [];
   private handler: Set<NachrichtenHandler> = new Set();
+  private letzteHallo: AusgehendeNachricht | null = null;
 
   public status: VerbindungsStatus = 'getrennt';
   public sync: ServerZeitSync = { rtt: 0, offset: 0, letzterAbgleich: 0 };
@@ -87,20 +92,24 @@ export class GameSocket {
 
   constructor() {
     if (typeof window !== 'undefined') {
-      window.addEventListener('online', () => {
-        if (
-          (this.status === 'reconnect' ||
-            this.status === 'nicht_erreichbar' ||
-            this.status === 'getrennt') &&
-          this.url &&
-          !this.demoAktiv
-        ) {
-          this.abbrechenReconnect();
-          this.reconnectVersuch = 0;
-          this.setStatus('reconnect');
-          this.initialisiereWebSocket();
-        }
+      window.addEventListener('online', () => this.sofortNeuVerbinden());
+      // Nach Display-Sperre oder App-Wechsel sofort neu verbinden statt auf den Backoff zu warten.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') this.sofortNeuVerbinden();
       });
+    }
+  }
+
+  private sofortNeuVerbinden(): void {
+    if (
+      (this.status === 'reconnect' || this.status === 'nicht_erreichbar') &&
+      this.url &&
+      !this.demoAktiv
+    ) {
+      this.abbrechenReconnect();
+      this.reconnectVersuch = 0;
+      this.setStatus('reconnect');
+      this.initialisiereWebSocket();
     }
   }
 
@@ -114,6 +123,7 @@ export class GameSocket {
     this.spielCode = code.toUpperCase();
     this.spielerId = spielerId;
     this.reconnectVersuch = 0;
+    this.letzteHallo = null;
 
     if (!basisUrl || basisUrl.trim().length === 0) {
       this.url = baueSpielWsUrl(this.spielCode, this.spielerId, token);
@@ -140,7 +150,7 @@ export class GameSocket {
 
     this.verbindungsTimeoutTimer = window.setTimeout(() => {
       this.verbindungsTimeoutTimer = null;
-      if (this.status === 'verbinde' || this.status === 'reconnect') {
+      if (this.status === 'verbinde' || this.status === 'reconnect' || this.status === 'nicht_erreichbar') {
         this.behandleVerbindungsAbbruch();
       }
     }, this.verbindungsTimeoutDauer);
@@ -152,6 +162,11 @@ export class GameSocket {
         this.loescheTimeoutTimer();
         this.setStatus('verbunden');
         this.reconnectVersuch = 0;
+        // Der Server markiert Spieler erst nach "hallo" wieder als online.
+        if (this.letzteHallo) {
+          this.offlineWarteschlange = this.offlineWarteschlange.filter((n) => n.typ !== 'hallo');
+          this.ws?.send(JSON.stringify(this.letzteHallo));
+        }
         this.sendeZeitSyncPing();
         this.starteHeartbeat();
         this.leereWarteschlange();
@@ -166,9 +181,25 @@ export class GameSocket {
         }
       };
 
-      this.ws.onclose = () => {
+      this.ws.onclose = (event: CloseEvent) => {
         this.loescheTimeoutTimer();
         this.stoppeHeartbeat();
+        // 4001: dieselbe Sitzung wurde in einem anderen Tab/Gerät geöffnet; 1008: Sitzung ungültig.
+        // Ein Reconnect würde sich dort gegenseitig endlos hinauswerfen.
+        if (event.code === 4001 || event.code === 1008) {
+          this.aufraeumenSocket();
+          this.setStatus('getrennt');
+          this.benachrichtigeHandler({
+            typ: 'fehler',
+            daten: {
+              code: event.code === 4001 ? 'SITZUNG_UEBERNOMMEN' : 'SITZUNG_UNGUELTIG',
+              nachricht: event.code === 4001
+                ? 'Dieses Spiel ist in einem anderen Tab oder auf einem anderen Gerät geöffnet.'
+                : 'Die Spielsitzung ist ungültig. Bitte tritt erneut bei.'
+            }
+          });
+          return;
+        }
         if (this.status !== 'getrennt' && !this.demoAktiv) {
           this.behandleVerbindungsAbbruch();
         }
@@ -185,21 +216,21 @@ export class GameSocket {
   private behandleVerbindungsAbbruch(): void {
     this.aufraeumenSocket();
 
+    // Draußen fallen Verbindungen oft kurz aus: weiter versuchen, aber den Ausfall melden.
     if (this.reconnectVersuch >= this.maxReconnectVersuche) {
-      this.setStatus('nicht_erreichbar');
-      this.benachrichtigeHandler({
-        typ: 'fehler',
-        daten: {
-          code: 'SERVER_NICHT_ERREICHBAR',
-          nachricht:
-            'Der Spielserver ist derzeit nicht erreichbar. Starte den lokalen Offline-Modus, um mit Bots zu testen.',
-          kannDemo: true
-        }
-      });
-      return;
+      if (this.status !== 'nicht_erreichbar') {
+        this.setStatus('nicht_erreichbar');
+        this.benachrichtigeHandler({
+          typ: 'fehler',
+          daten: {
+            code: 'SERVER_NICHT_ERREICHBAR',
+            nachricht: 'Keine Verbindung zum Spielserver. Neuer Versuch läuft automatisch …'
+          }
+        });
+      }
+    } else {
+      this.setStatus('reconnect');
     }
-
-    this.setStatus('reconnect');
     this.planeReconnect();
   }
 
@@ -218,7 +249,7 @@ export class GameSocket {
 
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.status === 'reconnect') {
+      if (this.status === 'reconnect' || this.status === 'nicht_erreichbar') {
         this.initialisiereWebSocket();
       }
     }, wartezeit);
@@ -586,7 +617,7 @@ export class GameSocket {
       return;
     }
 
-    if (typ === 'host') {
+    if (typ === 'host_start' || typ === 'host') {
       const aktion = daten?.aktion;
       if (aktion === 'start') {
         this.demoPhase = 'jagd';
@@ -684,9 +715,14 @@ export class GameSocket {
     spitzname: string,
     icon: string,
     farbe: string,
-    token: string = ''
+    token: string = '',
+    rolle: string = 'hider'
   ): void {
-    this.senden('hallo', { spitzname, icon, farbe, token });
+    const payload = { id: this.spielerId, spitzname, icon, farbe, rolle, token };
+    this.letzteHallo = { typ: 'hallo', payload, zeit: Date.now() };
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.senden('hallo', payload);
+    }
   }
 
   public sendOrt(ort: {
@@ -707,15 +743,11 @@ export class GameSocket {
     this.senden('fangAntwort', { fangId, bestaetigt });
   }
 
-  public sendQrFang(zielId: string, token: string): void {
-    this.senden('qrFang', { zielId, token });
-  }
-
   public sendFaehigkeit(
     id: string,
     params?: { zielId?: string; lat?: number; lng?: number }
   ): void {
-    this.senden('faehigkeit', { id, ...params });
+    this.senden('faehigkeit', { faehigkeitId: id, ...params });
   }
 
   public sendTicket(ticket: {
@@ -724,7 +756,13 @@ export class GameSocket {
     linie?: string;
     spezial?: string;
   }): void {
-    this.senden('ticket', ticket);
+    const ticketTyp = ticket.verkehrsmittel === 'doppel' ? 'doppelzug' : ticket.verkehrsmittel;
+    this.senden('ticket', {
+      ticketTyp,
+      haltestelle: ticket.haltestelle,
+      linie: ticket.linie,
+      spezial: ticket.spezial,
+    });
   }
 
   public sendChat(kanal: 'alle' | 'team' | 'zuschauer', text: string): void {
@@ -732,7 +770,8 @@ export class GameSocket {
   }
 
   public sendHost(aktion: string, daten: Record<string, unknown> = {}): void {
-    this.senden('host', { aktion, ...daten });
+    if (aktion === 'start') this.senden('host_start', daten);
+    if (aktion === 'setup') this.senden('host_setup', daten);
   }
 }
 

@@ -10,6 +10,12 @@
     details?: string;
   }
 
+  interface Props {
+    spielDauerMs?: number;
+    ereignisse?: ReplayEreignis[];
+    onSchliessen?: () => void;
+  }
+
   let {
     spielDauerMs = 1800000, // 30 Minuten
     ereignisse = [
@@ -20,11 +26,7 @@
       { zeitMs: 1540000, typ: 'faehigkeit', titel: 'Radar gezündet' },
     ] as ReplayEreignis[],
     onSchliessen = () => {},
-  } = $props<{
-    spielDauerMs?: number;
-    ereignisse?: ReplayEreignis[];
-    onSchliessen?: () => void;
-  }>();
+  }: Props = $props();
 
   let aktuelleZeitMs = $state(0);
   let istAmAbspielen = $state(false);

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { spielNetz } from '../lib/netz/socket';
   import QRCode from 'qrcode';
   import GlasKnopf from '../lib/ui/GlasKnopf.svelte';
   import GlasKapsel from '../lib/ui/GlasKapsel.svelte';
@@ -9,7 +10,7 @@
   export interface LobbySpieler {
     id: string;
     name: string;
-    rolle: 'jaeger' | 'gejagt' | 'zombie';
+    rolle: string;
     istHost: boolean;
     istIch: boolean;
     gpsBereit: boolean;
@@ -17,8 +18,18 @@
 
   interface Props {
     spielCode?: string;
+    spielerId?: string;
+    token?: string;
+    spielerName?: string;
     istHost?: boolean;
-    spielerListe?: LobbySpieler[];
+    startModus?: 'klassisch' | 'zombie' | 'mrx';
+    onmoduswechsel?: (modus: string) => void;
+    zoneMitte?: [number, number];
+    zoneMitteRadius?: number;
+    zonenStufen?: number;
+    radiusFaktor?: number;
+    zoneManuell?: boolean;
+    onZoneMitteAendern?: (mitte: [number, number]) => void;
     onstart?: (daten?: { modus: string; rolle: string }) => void;
     onverlassen?: () => void;
     onzoneneditor?: () => void;
@@ -26,27 +37,28 @@
 
   let {
     spielCode = 'HNT-782',
+    spielerId = '',
+    token = '',
+    spielerName = 'Spieler',
     istHost = true,
-    spielerListe = [
-      { id: '1', name: 'Jojo (Host)', rolle: 'jaeger', istHost: true, istIch: true, gpsBereit: true },
-      { id: '2', name: 'Alex', rolle: 'gejagt', istHost: false, istIch: false, gpsBereit: true },
-      { id: '3', name: 'Sarah', rolle: 'gejagt', istHost: false, istIch: false, gpsBereit: true },
-      { id: '4', name: 'Lukas', rolle: 'gejagt', istHost: false, istIch: false, gpsBereit: false }
-    ],
+    startModus = 'klassisch',
+    onmoduswechsel,
+    zoneMitte = [13.405, 52.52],
+    zoneMitteRadius = 1000,
+    zonenStufen = 4,
+    radiusFaktor = 0.65,
+    zoneManuell = false,
+    onZoneMitteAendern,
     onstart,
     onverlassen,
     onzoneneditor
   }: Props = $props();
 
   let spieler = $state<LobbySpieler[]>([]);
-  let initialisiert = false;
-  $effect(() => {
-    if (!initialisiert) {
-      spieler = [...spielerListe];
-      initialisiert = true;
-    }
-  });
-  let modus = $state<'klassisch' | 'zombie' | 'mrx'>('klassisch');
+  let modus = $state<'klassisch' | 'zombie' | 'mrx'>(untrack(() => startModus));
+  let spielVerbindungAktiv = $state(false);
+  let verbindungsFehler = $state('');
+  let zoneBereit = $state(untrack(() => zoneManuell));
   let settingsSheetOffen = $state(false);
   let qrSheetOffen = $state(false);
   let qrDataUrl = $state('');
@@ -62,29 +74,135 @@
   let spieldauer = $state(60);
   let versteckzeit = $state(10);
   let pingIntervall = $state(5);
-  let zonenRadius = $state(1000);
+  let zonenRadius = $state(untrack(() => zoneMitteRadius));
+  let aktuellesZentrum = $state<[number, number]>(untrack(() => zoneMitte));
   let faehigkeitenAktiv = $state(false);
 
-  onMount(async () => {
-    try {
-      const shareUrl = `${window.location.origin}${window.location.pathname}?code=${spielCode}`;
-      qrDataUrl = await QRCode.toDataURL(shareUrl, {
+  onMount(() => {
+    const shareUrl = `${window.location.origin}${window.location.pathname}?code=${spielCode}`;
+    void QRCode.toDataURL(shareUrl, {
         margin: 2,
         color: {
           dark: '#0a0a0c',
           light: '#f2f2ee'
         },
         width: 280
+      }).then((url) => (qrDataUrl = url)).catch((e) => {
+        console.error('QR-Code Generierung fehlgeschlagen', e);
       });
-    } catch (e) {
-      console.error('QR-Code Generierung fehlgeschlagen', e);
+
+    const abmelden = spielNetz.abonnieren((nachricht) => {
+      if (nachricht.typ === 'zustand') {
+        const daten = nachricht.daten as Record<string, any>;
+        if (daten.code !== spielCode) return;
+        spielVerbindungAktiv = true;
+        verbindungsFehler = '';
+        modus = daten.modus || modus;
+        onmoduswechsel?.(modus);
+        const einstellungen = daten.einstellungen || {};
+        if (einstellungen.dauerMinuten) spieldauer = einstellungen.dauerMinuten;
+        if (einstellungen.versteckZeitMinuten) versteckzeit = einstellungen.versteckZeitMinuten;
+        if (einstellungen.pingIntervallMinuten) pingIntervall = einstellungen.pingIntervallMinuten;
+        if (einstellungen.zonenRadiusStartMeter) zonenRadius = einstellungen.zonenRadiusStartMeter;
+        if (typeof einstellungen.faehigkeitenAktiv === 'boolean') faehigkeitenAktiv = einstellungen.faehigkeitenAktiv;
+        spieler = Object.values(daten.spieler || {}).map((eintrag: any) => ({
+          id: eintrag.id,
+          name: eintrag.spitzname || 'Spieler',
+          rolle: eintrag.rolle || 'gejagt',
+          istHost: Boolean(eintrag.istHost),
+          istIch: eintrag.id === spielerId,
+          gpsBereit: Boolean(eintrag.online)
+        }));
+
+        if (daten.phase && daten.phase !== 'lobby') {
+          onstart?.({ modus: daten.modus || modus, rolle: rolleFuerSpiel(eigeneRolle()) });
+        }
+      } else if (nachricht.typ === 'fehler') {
+        verbindungsFehler = nachricht.daten?.nachricht || 'Verbindung zum Spielserver fehlgeschlagen.';
+      }
+    });
+
+    if (spielCode && spielerId && token) {
+      spielNetz.verbinden('', spielCode, spielerId, token);
+      spielNetz.sendHallo(spielerName, 'circle', '#ff5c00');
+      // Beim (Wieder-)Einstieg nur Modus und Zone senden: die Einstellungen liegen bereits am Server
+      // und kommen mit dem nächsten Zustand zurück. Sonst überschreiben die Standardwerte die Wahl des Hosts.
+      sendeZone();
+    } else {
+      verbindungsFehler = 'Die sichere Spielsitzung fehlt. Bitte tritt dem Spiel erneut bei.';
     }
+
+    if (istHost && !zoneManuell && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition((position) => {
+        aktuellesZentrum = [position.coords.longitude, position.coords.latitude];
+        zoneBereit = true;
+        verbindungsFehler = '';
+        onZoneMitteAendern?.(aktuellesZentrum);
+        sendeZone();
+      }, () => {
+        verbindungsFehler = 'Standort nicht verfügbar. Passe die Spielzone vor dem Start manuell an.';
+      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+    }
+
+    const statusTimer = window.setInterval(() => {
+      spielVerbindungAktiv = spielVerbindungAktiv && spielNetz.status === 'verbunden';
+    }, 500);
+
+    return () => {
+      window.clearInterval(statusTimer);
+      abmelden();
+      spielNetz.trennen();
+    };
   });
 
+  function rolleFuerSpiel(rolle: string): string {
+    if (rolle === 'mrx' || rolle === 'detektiv') return rolle;
+    if (rolle === 'zombie' || rolle === 'mensch') return rolle === 'zombie' ? 'zombie' : 'hider';
+    return rolle === 'seeker' ? 'seeker' : 'hider';
+  }
+
+  function eigeneRolle(): string {
+    return spieler.find((s) => s.istIch)?.rolle || (istHost ? (modus === 'mrx' ? 'mrx' : modus === 'zombie' ? 'zombie' : 'seeker') : 'hider');
+  }
+
+  function baueEinstellungen() {
+    return {
+      dauerMinuten: Number(spieldauer),
+      versteckZeitMinuten: Number(versteckzeit),
+      pingIntervallMinuten: Number(pingIntervall),
+      zonenRadiusStartMeter: Number(zonenRadius),
+      faehigkeitenAktiv
+    };
+  }
+
+  function baueSetupDaten() {
+    return {
+      modus,
+      einstellungen: baueEinstellungen(),
+      zoneMittelpunkt: { lng: aktuellesZentrum[0], lat: aktuellesZentrum[1] },
+      zonenStufen,
+      radiusFaktor,
+      zonenRadiusStartMeter: Number(zonenRadius)
+    };
+  }
+
+  function sendeZone() {
+    if (!istHost) return;
+    const { einstellungen: _einstellungen, ...nurZone } = baueSetupDaten();
+    spielNetz.sendHost('setup', nurZone);
+  }
+
+  function synchronisiereEinstellungen() {
+    if (istHost) spielNetz.sendHost('setup', baueSetupDaten());
+  }
+
   function kopiereCode() {
-    navigator.clipboard?.writeText(spielCode);
-    codeKopiert = true;
-    setTimeout(() => (codeKopiert = false), 2000);
+    navigator.clipboard?.writeText(spielCode).then(() => {
+      codeKopiert = true;
+      setTimeout(() => (codeKopiert = false), 2000);
+    }).catch(() => {
+      codeKopiert = false;
+    });
   }
 
   function teileLink() {
@@ -100,31 +218,6 @@
     }
   }
 
-  function toggleRolle(id: string) {
-    if (!istHost) return;
-    spieler = spieler.map(s => {
-      if (s.id === id) {
-        const neueRolle = s.rolle === 'jaeger' ? 'gejagt' : 'jaeger';
-        return { ...s, rolle: neueRolle };
-      }
-      return s;
-    });
-  }
-
-  function zufaelligeRollen() {
-    if (!istHost) return;
-    // Mindestens 1 Jäger, Rest Gejagt
-    const shuff = [...spieler].sort(() => Math.random() - 0.5);
-    const anzahlJaeger = Math.max(1, Math.floor(shuff.length / 3));
-    spieler = spieler.map(s => {
-      const index = shuff.findIndex(x => x.id === s.id);
-      return {
-        ...s,
-        rolle: index < anzahlJaeger ? 'jaeger' : 'gejagt'
-      };
-    });
-  }
-
   function waehlePreset(id: string) {
     gewaehltesPreset = id;
     const p = presets.find(x => x.id === id);
@@ -133,12 +226,20 @@
       versteckzeit = p.versteck;
       pingIntervall = p.ping;
       zonenRadius = p.radius;
+      synchronisiereEinstellungen();
     }
   }
 
-  let jaegerGruppe = $derived(spieler.filter(s => s.rolle === 'jaeger'));
-  let gejagtGruppe = $derived(spieler.filter(s => s.rolle === 'gejagt' || s.rolle === 'zombie'));
+  function waehleModus(id: 'klassisch' | 'zombie' | 'mrx') {
+    modus = id;
+    onmoduswechsel?.(id);
+    synchronisiereEinstellungen();
+  }
+
+  let jaegerGruppe = $derived(spieler.filter(s => ['seeker', 'jaeger', 'zombie', 'detektiv'].includes(s.rolle)));
+  let gejagtGruppe = $derived(spieler.filter(s => ['hider', 'gejagt', 'mensch', 'mrx'].includes(s.rolle)));
   let ichSpieler = $derived(spieler.find(s => s.istIch));
+  let onlineSpielerAnzahl = $derived(spieler.filter((s) => s.gpsBereit).length);
 </script>
 
 <div class="lobby-screen">
@@ -175,6 +276,12 @@
       </div>
     </section>
 
+    {#if verbindungsFehler}
+      <p class="lobby-hinweis fehler" role="alert">{verbindungsFehler}</p>
+    {:else if !spielVerbindungAktiv}
+      <p class="lobby-hinweis" role="status">Verbinde sicher mit dem Spielserver …</p>
+    {/if}
+
     <!-- Modus-Wahl (Große, kontrastreiche Flächen) -->
     <section class="modus-sektion">
       <div class="sektion-kopf">
@@ -184,7 +291,8 @@
       <div class="modus-gitter">
         <button
           class="modus-karte {modus === 'klassisch' ? 'ist-aktiv' : ''}"
-          onclick={() => (modus = 'klassisch')}
+          disabled={!istHost}
+          onclick={() => waehleModus('klassisch')}
         >
           <div class="modus-name">Klassisch</div>
           <div class="modus-desc">Seeker vs. Hider mit Zonen und Radar-Pings</div>
@@ -192,7 +300,8 @@
 
         <button
           class="modus-karte {modus === 'zombie' ? 'ist-aktiv' : ''}"
-          onclick={() => (modus = 'zombie')}
+          disabled={!istHost}
+          onclick={() => waehleModus('zombie')}
         >
           <div class="modus-name">Zombie</div>
           <div class="modus-desc">Gefangene verwandeln sich in Zombies</div>
@@ -200,7 +309,8 @@
 
         <button
           class="modus-karte {modus === 'mrx' ? 'ist-aktiv' : ''}"
-          onclick={() => (modus = 'mrx')}
+          disabled={!istHost}
+          onclick={() => waehleModus('mrx')}
         >
           <div class="modus-name">Mr. X</div>
           <div class="modus-desc">ÖPNV-Jagd mit Bus-, Bahn- und Black-Tickets</div>
@@ -211,41 +321,30 @@
     <!-- Rollenverteilung (Deckende Flächen für Tabellen/Listen) -->
     <section class="spieler-sektion">
       <div class="sektion-kopf">
-        <span class="sektion-titel">SPIELER ({spieler.length})</span>
-        {#if istHost}
-          <button class="aktion-link" onclick={zufaelligeRollen}>
-            <Icon name="shuffle" size={16} />
-            <span>Zufall</span>
-          </button>
-        {/if}
+        <span class="sektion-titel">SPIELER ({spieler.length}) · {onlineSpielerAnzahl} ONLINE</span>
       </div>
 
       <div class="team-spalten">
         <!-- Team Jäger -->
         <div class="team-spalte">
           <div class="team-kopf kopf-jaeger">
-            <span>JÄGER ({jaegerGruppe.length})</span>
+            <span>{modus === 'mrx' ? 'DETEKTIVE' : modus === 'zombie' ? 'ZOMBIES' : 'JÄGER'} ({jaegerGruppe.length})</span>
           </div>
           <div class="team-liste">
             {#each jaegerGruppe as s (s.id)}
               <div
                 class="spieler-eintrag"
-                role="button"
-                tabindex="0"
-                onclick={() => toggleRolle(s.id)}
-                onkeydown={(e) => e.key === 'Enter' && toggleRolle(s.id)}
               >
                 <div class="spieler-avatar avatar-jaeger"></div>
-                <span class="spieler-name">{s.name} {s.istIch ? '(Du)' : ''}</span>
-                {#if s.gpsBereit}
-                  <span class="gps-ok" title="GPS aktiv"><Icon name="locate" size={14} /></span>
-                {:else}
-                  <span class="gps-fehlt" title="GPS fehlt"><Icon name="alert-triangle" size={14} /></span>
+                <span class="spieler-name">{s.name}</span>
+                {#if s.istIch || s.istHost}
+                  <span class="spieler-marke">{s.istIch ? 'Du' : ''}{s.istIch && s.istHost ? ' · ' : ''}{s.istHost ? 'Host' : ''}</span>
                 {/if}
+                <span class="verbindungs-punkt" class:getrennt={!s.gpsBereit} title={s.gpsBereit ? 'Verbunden' : 'Getrennt'} aria-label={s.gpsBereit ? 'Verbunden' : 'Getrennt'}></span>
               </div>
             {/each}
             {#if jaegerGruppe.length === 0}
-              <div class="leer-hinweis">Kein Jäger zugewiesen</div>
+              <div class="leer-hinweis">Warte auf Spieler …</div>
             {/if}
           </div>
         </div>
@@ -253,26 +352,24 @@
         <!-- Team Gejagt -->
         <div class="team-spalte">
           <div class="team-kopf kopf-gejagt">
-            <span>GEJAGT ({gejagtGruppe.length})</span>
+            <span>{modus === 'mrx' ? 'MR. X' : modus === 'zombie' ? 'MENSCHEN' : 'GEJAGTE'} ({gejagtGruppe.length})</span>
           </div>
           <div class="team-liste">
             {#each gejagtGruppe as s (s.id)}
               <div
                 class="spieler-eintrag"
-                role="button"
-                tabindex="0"
-                onclick={() => toggleRolle(s.id)}
-                onkeydown={(e) => e.key === 'Enter' && toggleRolle(s.id)}
               >
                 <div class="spieler-avatar avatar-gejagt"></div>
-                <span class="spieler-name">{s.name} {s.istIch ? '(Du)' : ''}</span>
-                {#if s.gpsBereit}
-                  <span class="gps-ok" title="GPS aktiv"><Icon name="locate" size={14} /></span>
-                {:else}
-                  <span class="gps-fehlt" title="GPS fehlt"><Icon name="alert-triangle" size={14} /></span>
+                <span class="spieler-name">{s.name}</span>
+                {#if s.istIch || s.istHost}
+                  <span class="spieler-marke">{s.istIch ? 'Du' : ''}{s.istIch && s.istHost ? ' · ' : ''}{s.istHost ? 'Host' : ''}</span>
                 {/if}
+                <span class="verbindungs-punkt" class:getrennt={!s.gpsBereit} title={s.gpsBereit ? 'Verbunden' : 'Getrennt'} aria-label={s.gpsBereit ? 'Verbunden' : 'Getrennt'}></span>
               </div>
             {/each}
+            {#if gejagtGruppe.length === 0}
+              <div class="leer-hinweis">Warte auf Spieler …</div>
+            {/if}
           </div>
         </div>
       </div>
@@ -284,7 +381,7 @@
     <div class="footer-kapsel-wrapper">
       <GlasKapsel variante="panel" klasse="footer-panel">
         <div class="footer-zeile">
-          <GlasKnopf variante="sekundaer" groesse="lg" onclick={onzoneneditor}>
+          <GlasKnopf variante="sekundaer" groesse="lg" deaktiviert={!istHost} onclick={onzoneneditor}>
             <Icon name="layers" size={20} />
             <span>Zone</span>
           </GlasKnopf>
@@ -293,10 +390,17 @@
             variante="primaer"
             groesse="lg"
             breit={true}
-            deaktiviert={!istHost || jaegerGruppe.length === 0}
-            onclick={() => onstart?.({ modus, rolle: ichSpieler?.rolle === 'jaeger' ? 'seeker' : (modus === 'mrx' ? 'mrx' : 'hider') })}
+            deaktiviert={!istHost || !spielVerbindungAktiv || (zoneBereit && onlineSpielerAnzahl < 2)}
+            onclick={() => {
+              if (!istHost || !spielVerbindungAktiv) return;
+              if (!zoneBereit) {
+                onzoneneditor?.();
+                return;
+              }
+              if (onlineSpielerAnzahl >= 2) onstart?.({ modus, rolle: rolleFuerSpiel(eigeneRolle()) });
+            }}
           >
-            <span>Jagd starten</span>
+            <span>{!istHost ? 'Warte auf Host' : !spielVerbindungAktiv ? 'Verbinde …' : !zoneBereit ? 'Zone festlegen' : onlineSpielerAnzahl < 2 ? 'Warte auf Mitspieler' : 'Jagd starten'}</span>
             <Icon name="arrow-right" size={20} color="#0a0a0c" />
           </GlasKnopf>
         </div>
@@ -321,6 +425,7 @@
         {#each presets as p}
           <button
             class="preset-btn {gewaehltesPreset === p.id ? 'ist-gewaehlt' : ''}"
+            disabled={!istHost}
             onclick={() => waehlePreset(p.id)}
           >
             {p.name}
@@ -333,7 +438,7 @@
           <span>Spieldauer</span>
           <span class="wert tabular-nums">{spieldauer} Min.</span>
         </label>
-        <input id="spieldauer" type="range" min="10" max="240" step="5" bind:value={spieldauer} />
+        <input id="spieldauer" type="range" min="10" max="240" step="5" bind:value={spieldauer} onchange={synchronisiereEinstellungen} disabled={!istHost} />
       </div>
 
       <div class="slider-gruppe">
@@ -341,7 +446,7 @@
           <span>Versteckzeit (Vorsprung)</span>
           <span class="wert tabular-nums">{versteckzeit} Min.</span>
         </label>
-        <input id="versteckzeit" type="range" min="1" max="30" step="1" bind:value={versteckzeit} />
+        <input id="versteckzeit" type="range" min="1" max="30" step="1" bind:value={versteckzeit} onchange={synchronisiereEinstellungen} disabled={!istHost} />
       </div>
 
       <div class="slider-gruppe">
@@ -349,12 +454,12 @@
           <span>Ping-Intervall</span>
           <span class="wert tabular-nums">{pingIntervall} Min.</span>
         </label>
-        <input id="pingintervall" type="range" min="1" max="30" step="1" bind:value={pingIntervall} />
+        <input id="pingintervall" type="range" min="1" max="30" step="1" bind:value={pingIntervall} onchange={synchronisiereEinstellungen} disabled={!istHost} />
       </div>
 
       <div class="schalter-gruppe">
         <span class="schalter-text">Fähigkeiten & Loot aktivieren</span>
-        <input type="checkbox" bind:checked={faehigkeitenAktiv} class="toggle-checkbox" />
+        <input type="checkbox" bind:checked={faehigkeitenAktiv} class="toggle-checkbox" onchange={synchronisiereEinstellungen} disabled={!istHost} />
       </div>
 
       <div class="zonen-link-box">
@@ -469,22 +574,10 @@
     color: var(--tinte-2);
   }
 
-  .aktion-link {
-    background: transparent;
-    border: none;
-    color: var(--tinte);
-    font-size: 0.8125rem;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-  }
-
   /* Modus Gitter */
   .modus-gitter {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
   }
 
@@ -519,11 +612,12 @@
   /* Team-Spalten */
   .team-spalten {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
   }
 
   .team-spalte {
+    min-width: 0;
     background: var(--flaeche);
     border: 1px solid var(--flaeche-rand);
     border-radius: var(--radius-m);
@@ -588,8 +682,37 @@
     white-space: nowrap;
   }
 
-  .gps-ok { color: #00e599; display: flex; }
-  .gps-fehlt { color: var(--rolle-jaeger); display: flex; }
+  .spieler-marke {
+    flex: none;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: var(--tinte-2);
+  }
+
+  .verbindungs-punkt {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border-radius: 50%;
+    background: #00e599;
+    box-shadow: 0 0 8px rgba(0, 229, 153, 0.35);
+  }
+
+  .verbindungs-punkt.getrennt {
+    background: #777780;
+    box-shadow: none;
+  }
+
+  .lobby-hinweis {
+    margin: 0;
+    color: var(--tinte-2);
+    font-size: 0.8rem;
+    text-align: center;
+  }
+
+  .lobby-hinweis.fehler {
+    color: var(--rolle-jaeger);
+  }
 
   .leer-hinweis {
     font-size: 0.75rem;
@@ -620,8 +743,29 @@
 
   .footer-zeile {
     display: flex;
-    gap: 12px;
+    gap: 10px;
     align-items: center;
+  }
+
+  /* Auf schmalen Handys muss der Start-Knopf schrumpfen statt die Leiste zu sprengen. */
+  .footer-zeile :global(.glas-knopf) {
+    padding: 0 16px;
+    font-size: 1rem;
+  }
+
+  .footer-zeile :global(.glas-knopf:not(.ist-breit)) {
+    flex: none;
+  }
+
+  .footer-zeile :global(.ist-breit) {
+    flex: 1 1 0;
+    min-width: 0;
+    width: auto;
+  }
+
+  .footer-zeile :global(.ist-breit span) {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* QR Modal */

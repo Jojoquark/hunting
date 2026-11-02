@@ -1,0 +1,7 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "worker", "runtimeExecutable": "pnpm", "runtimeArgs": ["--filter", "@hunting/worker", "dev", "--port", "8787"], "port": 8787 },
+    { "name": "app", "runtimeExecutable": "pnpm", "runtimeArgs": ["--filter", "hunting-app", "dev"], "port": 5173 }
+  ]
+}

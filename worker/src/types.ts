@@ -147,9 +147,21 @@ export interface SpielZustand {
     };
   };
   lootPunkte: LootPunkt[];
+  zonenPlan?: Array<{
+    stufe: number;
+    mittelpunkt: Koordinate;
+    radiusMeter: number;
+    warnungZeitpunkt: number;
+    schrumpfStartZeitpunkt: number;
+    schrumpfEndeZeitpunkt: number;
+  }>;
+  zonenStatus?: 'stabil' | 'warnung' | 'schrumpft';
   phasenStartZeit: number;
   naechsterPingZeit: number;
   jetzt: number;
+  beendetUm?: number;
+  datenBereinigt?: boolean;
+  letzterLootSpawn?: number;
   sieger?: 'seeker' | 'hider' | 'zombie' | 'mensch' | 'mrx' | 'detektiv';
 }
 

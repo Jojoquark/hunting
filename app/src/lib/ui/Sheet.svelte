@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
 
@@ -10,10 +11,50 @@
   }
 
   let { offen = false, titel = '', onclose, children }: Props = $props();
+  let sheet = $state<HTMLDivElement | null>(null);
+  let zuletztFokussiert: HTMLElement | null = null;
+  let warOffen = false;
+
+  $effect(() => {
+    if (offen && !warOffen) {
+      warOffen = true;
+      zuletztFokussiert = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      void tick().then(() => {
+        const erstesElement = sheet?.querySelector<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (erstesElement) erstesElement.focus();
+        else sheet?.focus();
+      });
+    } else if (!offen && warOffen) {
+      warOffen = false;
+      zuletztFokussiert?.focus();
+      zuletztFokussiert = null;
+    }
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && offen) {
       onclose?.();
+      return;
+    }
+    if (e.key !== 'Tab' || !offen || !sheet) return;
+
+    const fokusierbar = Array.from(sheet.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+    ));
+    if (fokusierbar.length === 0) {
+      e.preventDefault();
+      sheet.focus();
+      return;
+    }
+
+    const zuerst = fokusierbar[0];
+    const zuletzt = fokusierbar[fokusierbar.length - 1];
+    if (e.shiftKey && (document.activeElement === zuerst || document.activeElement === sheet)) {
+      e.preventDefault();
+      zuletzt.focus();
+    } else if (!e.shiftKey && document.activeElement === zuletzt) {
+      e.preventDefault();
+      zuerst.focus();
     }
   }
 </script>
@@ -23,8 +64,8 @@
 {#if offen}
   <div class="sheet-scrim" onclick={onclose} role="presentation"></div>
 
-  <div class="sheet-container" role="dialog" aria-modal="true" aria-label={titel}>
-    <div class="sheet-handle-bereich" onclick={onclose} role="presentation">
+  <div bind:this={sheet} class="sheet-container" role="dialog" aria-modal="true" aria-label={titel} tabindex="-1">
+    <div class="sheet-handle-bereich" role="presentation">
       <div class="sheet-handle"></div>
     </div>
 

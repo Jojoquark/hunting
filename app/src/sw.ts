@@ -19,13 +19,14 @@ self.addEventListener('push', (event: PushEvent) => {
   }
 
   const titel = daten.title || '⚠️ PING IN 60 SEKUNDEN!';
-  const options: NotificationOptions = {
+  const symbol = new URL('./icon-192.png', self.registration.scope).href;
+  const options: NotificationOptions & { vibrate?: number[]; renotify?: boolean } = {
     body: daten.body || 'Öffne sofort die HUNTING-App, um deine Funkloch-Strafe zu vermeiden!',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
+    icon: symbol,
+    badge: symbol,
     vibrate: [200, 100, 200, 100, 400],
     data: {
-      url: daten.url || '/',
+      url: daten.url || new URL('./', self.registration.scope).href,
       code: daten.code || '',
       typ: daten.typ || 'ping-warnung',
     },

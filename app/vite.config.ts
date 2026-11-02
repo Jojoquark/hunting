@@ -20,6 +20,7 @@ export default defineConfig({
         name: 'HUNTING – Nachtjagd',
         short_name: 'HUNTING',
         description: 'Das GPS-Echtzeit-Fangspiel für dein Revier',
+        lang: 'de',
         theme_color: '#0a0a0c',
         background_color: '#0a0a0c',
         display: 'standalone',

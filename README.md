@@ -10,13 +10,12 @@
 
 ## ⚡ Highlights
 
-- 📱 **Zero-Install PWA:** Läuft direkt im Browser auf jedem iPhone und Android-Gerät – kein App Store, kein Download.
-- 🌐 **100% Server-Authoritative:** Cloudflare Durable Objects als Single Source of Truth. Cheating über Browser-DevTools unmöglich.
-- 📡 **Funkloch-Mechanik:** Das iOS-Hintergrundlimit wird zum Spielelement – Web-Push vor jedem Ping warnt dich vor der Funkloch-Strafe!
-- 🗺️ **Nachtjagd-Optik:** Scharfes, dunkles OpenFreeMap-Vektorkartendesign mit schwebenden Liquid-Glass-Kapseln und taktischem Radar-Puls.
-- 🎮 **3 packende Spielmodi:** Klassisch (Jäger & Gejagte), Zombie (Infektion & Unschärferaster) und Mr. X (ÖPNV-Tickets & Urban Hunt).
-- 🧪 **10 schaltbare Fähigkeiten & Loot-Spawns:** Tarnkappe, Köder, Störsender, Peilung, Radar, Zonenstoß und mehr.
-- 🔄 **Replay & Statistiken:** Interaktiver Match-Rückblick mit Timeline-Scrubbing und Firebase-Bestenliste.
+- 📱 **PWA für Smartphones:** Läuft im Browser und kann auf iPhone und Android zum Home-Bildschirm hinzugefügt werden.
+- 🌐 **Spielregeln im Worker:** Cloudflare Durable Objects verwalten den Raumzustand und prüfen spielrelevante Aktionen. Geräte-Standort kann durch Browser oder Gerät verfälscht werden; HUNTING kann GPS-Spoofing nicht verhindern.
+- 📍 **Standortfreigabe:** Der Host-Standort wird zum Einrichten der Zone und während der geöffneten Runde an den Spielserver gesendet. Verlässliche Hintergrundortung und Push-Benachrichtigungen sind derzeit deaktiviert.
+- 🗺️ **Nachtjagd-Optik:** Dunkles OpenFreeMap-Vektorkartendesign mit schwebenden Liquid-Glass-Kapseln und taktischem Radar-Puls.
+- 🎮 **3 Spielmodi:** Klassisch (Jäger & Gejagte), Zombie (Infektion & Unschärferaster) und Mr. X (ÖPNV-Tickets & Urban Hunt).
+- 🧪 **Fähigkeiten und Loot:** Mehrere Fähigkeiten und Loot-Spawns bringen zusätzliche Spieloptionen.
 
 ---
 
@@ -24,28 +23,27 @@
 
 ```mermaid
 flowchart LR
-  subgraph Phone["Handy (PWA)"]
+  subgraph Device["Smartphone (Browser/PWA)"]
     UI["Svelte 5 + MapLibre GL"]
-    SW["Service Worker: Cache + Web-Push"]
+    GPS["Browser-Geolocation"]
   end
-  subgraph Cloudflare["Cloudflare Edge (Kostenlos)"]
-    W["Worker HTTP Router"]
-    DO["GameRoom Durable Object (SQLite + Alarme)"]
-    TR["Transit-Proxy (transport.rest / Overpass)"]
-  end
-  subgraph Firebase["Firebase (Kostenlos)"]
-    AUTH["Firebase Auth (Anonym / Google)"]
-    RTDB["Realtime DB: Stats & Bestenliste"]
+  subgraph Cloudflare["Cloudflare"]
+    W["Worker: HTTP + WebSocket"]
+    DO["GameRoom Durable Object\nSpielzustand der Runde"]
   end
 
-  UI -- "WebSocket (Echtzeit-Tunnel)" --> DO
-  DO -- "Gefilterter Zustand (Anti-Cheat)" --> UI
-  DO -- "Web-Push (VAPID)" --> SW
-  UI -- "ID-Token" --> AUTH
-  DO -- "Ergebnisse (REST Service Account)" --> RTDB
-  UI -- "Haltestellen-Abfrage" --> TR
+  GPS -- "Standort für Zone und Runde" --> UI
+  UI -- "HTTP: Räume erstellen und beitreten" --> W
   W --> DO
+  UI -- "WebSocket: Echtzeit-Spiel" --> DO
+  DO -- "Spielzustand nach Rolle und Modus" --> UI
 ```
+
+## Standort und Hintergrundbetrieb
+
+Der Browser fragt nach Standortzugriff. Der Host-Standort legt die Startzone fest; während der Runde sendet die App Positionen über eine WebSocket-Verbindung an den Cloudflare Worker. Der Durable Object verwaltet den Spielraum und verteilt den Spielzustand abhängig von Rolle und Modus an die Mitspielenden. Standortdaten stammen vom Gerät und sind keine verlässliche Identitäts- oder Sicherheitsprüfung.
+
+Lass HUNTING während der Runde geöffnet und das Display eingeschaltet. Wenn das Betriebssystem die App im Hintergrund anhält, können Standortaktualisierungen ausbleiben. Hintergrund-Push ist derzeit deaktiviert.
 
 ---
 
@@ -88,34 +86,43 @@ pnpm install
 pnpm test
 
 # Client lokal starten (Svelte 5 PWA auf Port 5173)
-pnpm --filter app dev
+pnpm --filter hunting-app dev
 
 # Worker & Durable Object lokal starten
-pnpm --filter worker dev
+pnpm --filter @hunting/worker dev
 ```
 
 ### Headless Bot-Simulator
 Um ein volles Spiel mit 6 automatisierten Spielern ohne Bewegung an der frischen Luft zu testen:
 ```bash
-pnpm --filter bot-simulator start
+pnpm --filter @hunting/bot-simulator start
 ```
+
+### Automatisierte Checks
+
+GitHub Actions fuehrt Typpruefung, Vitest und den PWA-Build aus. Browser-E2E-Tests sind derzeit nicht eingerichtet; die Dateien unter `tests/e2e` laufen als Vitest-Simulationen mit einem In-Memory-Spielraum und pruefen keinen echten Browserablauf.
+
+### Oeffentlicher Deploy
+
+- **PWA:** GitHub Pages muss im Repository auf „GitHub Actions“ als Quelle eingestellt sein. Aenderungen an App, Shared-Code oder Abhaengigkeitsmanifesten auf `main`/`master` bauen und veroeffentlichen die PWA.
+- **Worker:** Fuer den automatischen Deploy muessen `CLOUDFLARE_API_TOKEN` und `CLOUDFLARE_ACCOUNT_ID` als GitHub Actions Secrets gesetzt sein. Fehlen sie, bricht der Deploy-Workflow mit einer klaren Fehlermeldung ab.
+- **Backend-Adresse der PWA:** Standard ist `wss://hunting-server.jojoquark.workers.dev/ws`. Liegt der Worker unter einer anderen `workers.dev`-Subdomain, die Repository-Variable `HUNTING_WS_URL` (Settings → Secrets and variables → Actions → Variables) auf `wss://hunting-server.<subdomain>.workers.dev/ws` setzen und den Pages-Workflow erneut ausfuehren.
+
+### Release-Checkliste vor der ersten Runde draussen
+
+1. Worker deployen: `cd worker && npx wrangler login && npx wrangler deploy`. Die ausgegebene URL notieren.
+2. Pruefen: `curl https://hunting-server.<subdomain>.workers.dev/` antwortet mit `HUNTING Backend API`.
+3. Weicht die Subdomain von `jojoquark` ab: `HUNTING_WS_URL` setzen (siehe oben) und „Deploy PWA to GitHub Pages“ neu starten.
+4. Auf zwei Handys `https://jojoquark.github.io/hunting/` oeffnen, Standort erlauben, ein Spiel erstellen und per QR-Code beitreten.
+5. Waehrend der Runde App geoeffnet und Display an lassen. Bei Funkloch verbindet sich die App automatisch neu; ein Neuladen fuehrt ueber den Spielcode in der Adresse zurueck in dieselbe Runde.
 
 ---
 
-## ⚙️ Cloudflare & Firebase Konfiguration
+## ⚙️ Cloudflare-Konfiguration
 
-1. **Cloudflare Worker Secrets:**
-   ```bash
-   cd worker
-   npx wrangler secret put VAPID_PUBLIC
-   npx wrangler secret put VAPID_PRIVATE
-   npx wrangler secret put FIREBASE_SA
-   npx wrangler secret put QR_SECRET
-   ```
-2. **Firebase Setup:**
-   - Projekt im kostenlosen Spark-Tarif anlegen.
-   - **Authentication:** Anonym + Google OAuth aktivieren.
-   - **Realtime Database:** Standort `europe-west1`, Regeln aus `firebase/database.rules.json` deployen.
+Der Worker verwendet ein Cloudflare Durable Object für jeden Spielraum. Für automatische Deploys müssen `CLOUDFLARE_API_TOKEN` und `CLOUDFLARE_ACCOUNT_ID` als GitHub Actions Secrets gesetzt sein. Die Wrangler-Konfiguration und Durable-Object-Migration liegen in `worker/wrangler.toml`.
+
+Die aktuelle Nutzer-App benötigt keine Firebase-Anmeldung oder Firebase-Datenbank. QR-Einladungen funktionieren als Link zum Beitreten. QR-gestützte Fänge und Hintergrund-Push sind deaktiviert.
 
 ---
 

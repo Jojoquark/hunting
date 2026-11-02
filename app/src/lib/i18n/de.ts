@@ -196,8 +196,8 @@ export const de = {
     },
     aktionen: {
       replay: 'Spiel-Replay ansehen',
-      revanche: 'Revanche in gleicher Gruppe',
-      lobby: 'Zurück zur Hauptlobby',
+      revanche: 'Neues Spiel erstellen',
+      lobby: 'Zurück zum Start',
     },
   },
 

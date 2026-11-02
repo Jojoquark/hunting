@@ -10,6 +10,7 @@
     initialRadius?: number;           // in Metern
     initialStufen?: number;
     initialFaktor?: number;
+    initialMitteManuell?: boolean;
     onspeichern?: (daten: { mitte: [number, number]; radius: number; stufen: number; faktor: number }) => void;
     onabbrechen?: () => void;
   }
@@ -19,6 +20,7 @@
     initialRadius = 1000,
     initialStufen = 4,
     initialFaktor = 0.65,
+    initialMitteManuell = false,
     onspeichern,
     onabbrechen
   }: Props = $props();
@@ -170,6 +172,17 @@
         }
       });
     });
+
+    if (!initialMitteManuell && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition((position) => {
+        const mitte: [number, number] = [position.coords.longitude, position.coords.latitude];
+        zonenMitte = mitte;
+        karte?.setCenter(mitte);
+        mitteMarker?.setLngLat(mitte);
+      }, () => {
+        // Die Karte bleibt nutzbar; der Mittelpunkt kann auch manuell gesetzt werden.
+      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+    }
   });
 
   onDestroy(() => {

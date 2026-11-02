@@ -3,19 +3,21 @@
   import { de } from '../lib/i18n/de';
   import { klang } from '../lib/klang/sound';
 
-  let {
-    faengerName = 'Ein Jäger',
-    zeitpunkt = '18:42',
-    modus = 'klassisch', // 'klassisch' | 'zombie' | 'mrx'
-    onWechselZuZuschauer = () => {},
-    onWechselZuZombie = () => {},
-  } = $props<{
-    faengerName?: string;
-    zeitpunkt?: string;
+  interface Props {
+    faengerName?: string | null;
+    zeitpunkt?: string | null;
     modus?: string;
     onWechselZuZuschauer?: () => void;
     onWechselZuZombie?: () => void;
-  }>();
+  }
+
+  let {
+    faengerName = null as string | null,
+    zeitpunkt = null as string | null,
+    modus = 'klassisch', // 'klassisch' | 'zombie' | 'mrx'
+    onWechselZuZuschauer = () => {},
+    onWechselZuZombie = () => {},
+  }: Props = $props();
 
   let istZombieModus = $derived(modus === 'zombie');
 
@@ -42,14 +44,16 @@
     <h1 class="titel">{de.gefangen.titel}</h1>
     <p class="untertitel">{de.gefangen.untertitel}</p>
 
-    <div class="info-kasten">
-      <div class="faenger-zeile">
-        {de.gefangen.gefangenVon.replace('%s', faengerName)}
+    {#if faengerName || zeitpunkt}
+      <div class="info-kasten">
+        {#if faengerName}
+          <div class="faenger-zeile">{de.gefangen.gefangenVon.replace('%s', faengerName)}</div>
+        {/if}
+        {#if zeitpunkt}
+          <div class="zeit-zeile">{de.gefangen.zeitpunkt.replace('%s', zeitpunkt)}</div>
+        {/if}
       </div>
-      <div class="zeit-zeile">
-        {de.gefangen.zeitpunkt.replace('%s', zeitpunkt)}
-      </div>
-    </div>
+    {/if}
 
     <div class="erklaerung">
       {#if istZombieModus}

@@ -1,10 +1,10 @@
 import { Spieler, SpielZustand } from '../types';
 
-export function verwandleInZombie(ziel: Spieler, faenger: Spieler, zustand: SpielZustand): void {
+export function verwandleInZombie(ziel: Spieler, faenger: Spieler | undefined, zustand: SpielZustand): void {
   ziel.rolle = 'zombie';
   ziel.gefangen = false;
   ziel.gefangenUm = zustand.jetzt;
-  ziel.gefangenVon = faenger.id;
+  ziel.gefangenVon = faenger?.id || 'zone';
 }
 
 export function pruefeZombieSieg(zustand: SpielZustand): 'zombie' | 'mensch' | null {

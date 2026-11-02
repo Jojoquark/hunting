@@ -6,6 +6,9 @@ on:
     paths:
       - 'app/**'
       - 'shared/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
       - '.github/workflows/app-deploy.yml'
   workflow_dispatch:
 
@@ -33,7 +36,7 @@ jobs:
       - name: pnpm einrichten
         uses: pnpm/action-setup@v3
         with:
-          version: 9
+          version: 9.15.9
 
       - name: Node.js 20 einrichten
         uses: actions/setup-node@v4
@@ -45,6 +48,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Svelte PWA bauen
+        env:
+          # Optional: Repository-Variable HUNTING_WS_URL, z. B. wss://hunting-server.<subdomain>.workers.dev/ws
+          VITE_WS_URL: ${{ vars.HUNTING_WS_URL }}
         run: pnpm --filter hunting-app build
 
       - name: Pages konfigurieren

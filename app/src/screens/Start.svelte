@@ -6,26 +6,23 @@
   import Sheet from '../lib/ui/Sheet.svelte';
 
   interface Props {
-    onerstellen?: () => void;
-    onbeitreten?: (code: string) => void;
+    onerstellen?: () => void | Promise<void>;
+    onbeitreten?: (code: string) => void | Promise<void>;
     oneinrichtung?: () => void;
     onprofil?: () => void;
+    serverFehler?: string;
+    spielErstellenLaedt?: boolean;
   }
 
-  let { onerstellen, onbeitreten, oneinrichtung, onprofil }: Props = $props();
+  let { onerstellen, onbeitreten, oneinrichtung, onprofil, serverFehler = '', spielErstellenLaedt = false }: Props = $props();
 
   let codeSheetOffen = $state(false);
   let spielCode = $state('');
   let fehlerText = $state('');
-  let istGitHubPages = $state(false);
   let istOnline = $state(true);
 
   onMount(() => {
     if (typeof window !== 'undefined') {
-      istGitHubPages =
-        window.location.hostname.includes('github.io') ||
-        window.location.hostname === 'localhost' ||
-        window.location.hostname === '127.0.0.1';
       istOnline = navigator.onLine;
 
       const onlineHandler = () => (istOnline = true);
@@ -58,19 +55,15 @@
   <header class="start-header">
     <div class="status-kapsel-gruppe">
       <GlasKapsel variante="kapsel" klasse="header-status-pill">
-        <div class="status-segment">
+        <div
+          class="status-segment"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          aria-label={istOnline ? 'Browser meldet online' : 'Browser meldet offline'}
+        >
           <span class="status-punkt" class:offline={!istOnline}></span>
-          <span class="status-text">{istOnline ? 'GPS BEREIT' : 'OFFLINE'}</span>
-        </div>
-
-        <span class="status-trenner" aria-hidden="true"></span>
-
-        <!-- GitHub Pages & Instant-Onboarding Reassurance Badge -->
-        <div class="status-segment onboarding-badge">
-          <Icon name="globe" size={13} color="var(--tinte-2)" />
-          <span class="onboarding-text">
-            {istGitHubPages ? 'Online-Modus bereit' : 'Sofort im Browser spielbar'}
-          </span>
+          <span class="status-text">{istOnline ? 'Browser online' : 'Offline'}</span>
         </div>
       </GlasKapsel>
     </div>
@@ -90,13 +83,14 @@
     <div class="hero-gruppe">
       <h1 class="hero-titel">HUNTING</h1>
       <p class="hero-untertitel">Das GPS-Echtzeit-Jagdspiel für dein Revier.</p>
+      <p class="netz-hinweis">Für gemeinsame Spiele wird Internet benötigt.</p>
     </div>
 
     <!-- Direkte, taktile Hauptaktionen -->
     <div class="start-aktionen">
-      <GlasKnopf variante="primaer" groesse="lg" breit={true} onclick={onerstellen}>
+      <GlasKnopf variante="primaer" groesse="lg" breit={true} deaktiviert={spielErstellenLaedt} onclick={onerstellen}>
         <Icon name="plus" size={22} color="#0a0a0c" />
-        <span>Spiel erstellen</span>
+        <span>{spielErstellenLaedt ? 'Spiel wird erstellt…' : 'Spiel erstellen'}</span>
       </GlasKnopf>
 
       <GlasKnopf variante="sekundaer" groesse="lg" breit={true} onclick={() => (codeSheetOffen = true)}>
@@ -104,14 +98,15 @@
         <span>Spiel beitreten</span>
       </GlasKnopf>
     </div>
+    {#if serverFehler}<p class="fehler-text" role="alert">{serverFehler}</p>{/if}
   </main>
 
-  <!-- Fußzeile mit Video-Wachhalter Reassurance & Einrichtungs-Link -->
+  <!-- Fußzeile mit Display-Hinweis & Einrichtungs-Link -->
   <footer class="start-footer">
     <div class="start-footer-bar">
       <div class="wachhalter-reassurance">
         <Icon name="awake" size={14} color="var(--akzent)" />
-        <span class="wachhalter-info-text">Display-Wachhalter aktiv</span>
+        <span class="wachhalter-info-text">Display beim Spielen anlassen</span>
       </div>
 
       <span class="footer-dot-sep">•</span>
@@ -125,15 +120,20 @@
 
   <!-- Beitreten-Sheet -->
   <Sheet offen={codeSheetOffen} titel="Spiel beitreten" onclose={() => (codeSheetOffen = false)}>
-    <div class="beitritt-formular">
+    <form class="beitritt-formular" novalidate onsubmit={(e) => { e.preventDefault(); starteBeitritt(); }}>
       <p class="anweisung">Gib den 6-stelligen Spielcode des Hosts ein:</p>
 
       <div class="code-eingabe-wrapper">
         <input
           type="text"
           bind:value={spielCode}
+          oninput={() => { spielCode = spielCode.toUpperCase(); fehlerText = ''; }}
+          enterkeyhint="go"
           maxlength="6"
+          minlength="6"
+          pattern="[A-Za-z0-9]{6}"
           placeholder="z.B. X7K9A2"
+          aria-label="Sechsstelliger Spielcode"
           class="code-input tabular-nums"
           autocomplete="off"
           autocapitalize="characters"
@@ -151,7 +151,7 @@
           <Icon name="arrow-right" size={20} color="#0a0a0c" />
         </GlasKnopf>
       </div>
-    </div>
+    </form>
   </Sheet>
 </div>
 
@@ -212,24 +212,6 @@
     color: var(--tinte);
   }
 
-  .status-trenner {
-    width: 1px;
-    height: 14px;
-    background: rgba(255, 255, 255, 0.16);
-  }
-
-  .onboarding-badge {
-    gap: 6px;
-  }
-
-  .onboarding-text {
-    font-size: 0.72rem;
-    font-weight: 600;
-    color: var(--tinte-2);
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-  }
-
   .header-aktionen {
     display: flex;
     gap: 10px;
@@ -284,6 +266,13 @@
     margin: 0;
     line-height: 1.45;
     max-width: 32ch;
+  }
+
+  .netz-hinweis {
+    margin: 12px 0 0;
+    color: var(--tinte-2);
+    font-size: 0.8125rem;
+    line-height: 1.4;
   }
 
   .start-aktionen {

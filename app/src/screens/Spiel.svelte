@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { de } from '../lib/i18n/de';
   import { spielNetz } from '../lib/netz/socket';
   import { geoTracker, type GeoPosition } from '../lib/ortung/geolocation';
@@ -8,21 +8,31 @@
   import Karte from '../lib/karte/Karte.svelte';
 
   // Props über Svelte 5 $props()
-  let {
-    spielerId = '',
-    spielCode = '',
-    rolle = 'hider', // 'seeker' | 'hider' | 'zombie' | 'mrx' | 'detektiv' | 'zuschauer'
-    modus = 'klassisch', // 'klassisch' | 'zombie' | 'mrx'
-    onGefangen = () => {},
-    onSpielEnde = (sieger: string) => {},
-  } = $props<{
+  interface Props {
     spielerId?: string;
+    token?: string;
+    spielerName?: string;
     spielCode?: string;
+    istHost?: boolean;
     rolle?: string;
     modus?: string;
     onGefangen?: () => void;
     onSpielEnde?: (sieger: string) => void;
-  }>();
+  }
+
+  let {
+    spielerId = '',
+    token = '',
+    spielerName = 'Spieler',
+    spielCode = '',
+    istHost = false,
+    rolle = 'hider', // 'seeker' | 'hider' | 'zombie' | 'mrx' | 'detektiv' | 'zuschauer'
+    modus = 'klassisch', // 'klassisch' | 'zombie' | 'mrx'
+    onGefangen = () => {},
+    onSpielEnde = (sieger: string) => {},
+  }: Props = $props();
+
+  let spielRolle = $state(untrack(() => rolle));
 
   // Reaktivität über Svelte 5 Runes ($state)
   let serverZeit = $state(Date.now());
@@ -43,7 +53,8 @@
     ungeleseneNachrichten: 0,
   });
 
-  let offenesSheet = $state<'keins' | 'faehigkeiten' | 'chat' | 'ticket' | 'qr'>('keins');
+  let offenesSheet = $state<'keins' | 'faehigkeiten' | 'chat' | 'ticket'>('keins');
+  let verbindungsStatus = $state('verbinde');
   let chatKanal = $state<'alle' | 'team' | 'zuschauer'>('team');
   let chatEingabe = $state('');
   let chatNachrichten = $state<Array<{ von: string; text: string; kanal: string; zeit: number }>>([]);
@@ -65,22 +76,6 @@
     'Stadtpark Nord',
   ]);
 
-  // QR-Fang Formular & Code
-  let qrEingabeZielId = $state('');
-  let qrEingabeToken = $state('');
-  let qrStatusMeldung = $state<string | null>(null);
-
-  let aktuellerQrToken = $derived.by(() => {
-    const slot = Math.floor(serverZeit / 30000);
-    let h = 0x811c9dc5;
-    const str = `${spielerId}:${slot}`;
-    for (let i = 0; i < str.length; i++) {
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
-    }
-    return (h >>> 0).toString(16).padStart(8, '0').toUpperCase();
-  });
-
   // Timer-Loop für synchrone Countdowns
   let timerIntervall: number | null = null;
 
@@ -99,9 +94,18 @@
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   });
 
+  let istVersteckphase = $derived(spielZustand.phase === 'verstecken');
+  let faehigkeitenAktiv = $derived(Boolean(spielZustand.einstellungen?.faehigkeitenAktiv));
+  // Fähigkeiten-Seite gemäß worker/src/faehigkeiten.ts
+  const HIDER_FAEHIGKEITEN = ['tarnkappe', 'koeder', 'radar', 'stoersender', 'schild'];
+  let sichtbareFaehigkeiten = $derived(
+    Object.entries(de.faehigkeiten.katalog).filter(([id]) =>
+      ['hider', 'mensch', 'mrx'].includes(spielRolle) ? HIDER_FAEHIGKEITEN.includes(id) : !HIDER_FAEHIGKEITEN.includes(id)
+    )
+  );
   let istMrXModus = $derived(modus === 'mrx');
-  let istMrX = $derived(rolle === 'mrx');
-  let kannFangen = $derived(rolle === 'seeker' || rolle === 'zombie' || rolle === 'detektiv');
+  let istMrX = $derived(spielRolle === 'mrx');
+  let kannFangen = $derived(spielRolle === 'seeker' || spielRolle === 'zombie' || spielRolle === 'detektiv');
 
   let letzteGeoPosition = $state<{ lat: number; lng: number; genauigkeit: number } | null>(null);
 
@@ -110,22 +114,22 @@
   );
 
   let kartenZone = $derived(
-    spielZustand.zone || {
-      mitte: zonenZentrum,
-      radius: spielZustand.zonenRadius || 1000,
-    }
+    spielZustand.zone || (spielZustand.aktuelleZone ? {
+      mitte: [spielZustand.aktuelleZone.mittelpunkt.lng, spielZustand.aktuelleZone.mittelpunkt.lat],
+      radius: spielZustand.aktuelleZone.radiusMeter,
+    } : { mitte: zonenZentrum, radius: spielZustand.zonenRadius || 1000 })
   );
 
   let kartenSpieler = $derived.by(() => {
     if (!spielZustand.spieler) return [];
     return Object.entries(spielZustand.spieler)
-      .filter(([id, sp]: [string, any]) => id !== spielerId && sp.position && sp.sicht?.art !== 'unsichtbar')
+      .filter(([id, sp]: [string, any]) => id !== spielerId && sp.sicht?.position && sp.sicht?.art !== 'unsichtbar')
       .map(([id, sp]: [string, any]) => ({
         id,
         name: sp.spitzname || sp.name || id,
-        rolle: (sp.rolle === 'seeker' || sp.rolle === 'jaeger') ? 'jaeger' : (sp.rolle === 'zombie' ? 'zombie' : 'gejagt'),
-        lat: sp.sicht?.position?.lat || sp.position.lat,
-        lng: sp.sicht?.position?.lng || sp.position.lng,
+        rolle: ((sp.rolle === 'seeker' || sp.rolle === 'jaeger') ? 'jaeger' : (sp.rolle === 'zombie' ? 'zombie' : 'gejagt')) as 'jaeger' | 'zombie' | 'gejagt',
+        lat: sp.sicht.position.lat,
+        lng: sp.sicht.position.lng,
         unscharf: sp.sicht?.art === 'unscharf',
       }));
   });
@@ -203,7 +207,12 @@
     initialisiereVideoWachhalter();
 
     if (spielCode) {
-      spielNetz.verbinden(spielCode, spielerId || 'sp_' + Math.random().toString(36).substring(2, 6));
+      spielNetz.verbinden('', spielCode, spielerId, token);
+      spielNetz.sendHallo(spielerName, spielRolle === 'seeker' ? 'crosshair' : 'circle', '#ff5c00', '', spielRolle);
+      if (istHost) {
+        spielNetz.sendHost('setup', { modus });
+        spielNetz.sendHost('start');
+      }
     }
 
     const unsubGeo = geoTracker.abonnieren((pos: GeoPosition) => {
@@ -220,16 +229,52 @@
     // 2. WebSocket Listener
     const unsubNetz = spielNetz.abonnieren((msg) => {
       if (msg.typ === 'zustand') {
-        spielZustand = { ...spielZustand, ...msg.daten };
-        if (msg.daten.ausserhalbZone !== undefined) {
-          geoTracker.setAusserhalbZone(msg.daten.ausserhalbZone);
-          if (msg.daten.ausserhalbZone) klang.zonenWarnung();
+        const daten = msg.daten;
+        if (daten.__status) {
+          verbindungsStatus = daten.__status;
+          return;
         }
-        if (msg.daten.gefangen) {
+        if (!daten.spieler) return;
+        const ich = daten.spieler[spielerId];
+        const vorherigeRolle = spielRolle;
+        if (ich?.rolle) spielRolle = ich.rolle;
+        const wurdeZombie = vorherigeRolle === 'mensch' && ich?.rolle === 'zombie';
+        const loot = (daten.lootPunkte || []).map((punkt: any) => ({
+          id: punkt.id,
+          lat: punkt.koordinate.lat,
+          lng: punkt.koordinate.lng,
+          wert: punkt.energieWert,
+        }));
+        const warAusserhalb = spielZustand.ausserhalbZone;
+        const istVersteckphase = daten.phase === 'verstecken';
+        spielZustand = {
+          ...spielZustand,
+          ...daten,
+          fangbar: Boolean(daten.fangZielId),
+          // In der Versteckphase läuft der Vorsprung-Countdown, danach die Jagdzeit.
+          spielEndeZeit: daten.phasenStartZeit && daten.einstellungen
+            ? daten.phasenStartZeit + (istVersteckphase
+              ? daten.einstellungen.versteckZeitMinuten
+              : daten.einstellungen.dauerMinuten) * 60000
+            : spielZustand.spielEndeZeit,
+          energie: typeof daten.energie === 'number' ? daten.energie : spielZustand.energie,
+          ausserhalbZone: Boolean(ich?.ausserhalbZone),
+          seekerInDerNaehe: Boolean(daten.naheGegner),
+          kulanzSekunden: daten.einstellungen?.kulanzZeitZoneSekunden ?? spielZustand.kulanzSekunden,
+          loot,
+        };
+        geoTracker.setAusserhalbZone(spielZustand.ausserhalbZone);
+        if (spielZustand.ausserhalbZone && !warAusserhalb) klang.zonenWarnung();
+        if ((ich?.gefangen || wurdeZombie) && daten.phase !== 'ende') {
           onGefangen();
         }
-        if (msg.daten.phase === 'ende') {
-          onSpielEnde(msg.daten.sieger || 'Unbekannt');
+        if (daten.phase === 'ende') {
+          const siegerMap: Record<string, string> = {
+            zombie: 'zombies',
+            mensch: 'menschen',
+            detektiv: 'detektive'
+          };
+          onSpielEnde(siegerMap[daten.sieger] || daten.sieger || 'Unbekannt');
         }
       } else if (msg.typ === 'ereignis') {
         if (msg.daten.typ === 'ping') {
@@ -239,13 +284,24 @@
         } else if (msg.daten.typ === 'fangAlarm') {
           klang.fangAlarm();
         } else if (msg.daten.typ === 'chat') {
-          chatNachrichten.push(msg.daten);
+          const chat = msg.daten.daten || msg.daten;
+          chatNachrichten.push({
+            von: chat.senderName || chat.von || 'Spieler',
+            text: String(chat.text || ''),
+            kanal: String(chat.kanal || 'alle'),
+            zeit: Number(chat.zeit || msg.daten.zeit || Date.now()),
+          });
           if (offenesSheet !== 'chat') {
             spielZustand.ungeleseneNachrichten++;
           }
         }
+      } else if ((msg as any).typ === 'faehigkeit_antwort') {
+        const antwort = msg as any;
+        zeigeToast(antwort.nachricht || (antwort.erfolg ? 'Fähigkeit aktiviert' : 'Fähigkeit nicht verfügbar'));
       } else if (msg.typ === 'fang_abgelehnt') {
-        qrStatusMeldung = `Abgelehnt: ${msg.daten?.grund || msg.daten || 'Ungültig'}`;
+        zeigeToast(msg.grund || String(msg.daten || 'Der Fang wurde abgelehnt.'));
+      } else if (msg.typ === 'fehler') {
+        zeigeToast(msg.daten?.nachricht || 'Die Aktion konnte nicht ausgeführt werden.');
       }
     });
 
@@ -294,21 +350,9 @@
   function sendeChatNachricht(text: string) {
     if (!text.trim()) return;
     spielNetz.sendChat(chatKanal, text.trim());
-    chatNachrichten.push({
-      von: 'Ich',
-      text: text.trim(),
-      kanal: chatKanal,
-      zeit: Date.now(),
-    });
     chatEingabe = '';
   }
 
-  function sendeQrFang() {
-    if (!qrEingabeZielId.trim() || !qrEingabeToken.trim()) return;
-    klang.klick();
-    spielNetz.sendQrFang(qrEingabeZielId.trim(), qrEingabeToken.trim());
-    qrStatusMeldung = 'QR-Fang übermittelt...';
-  }
 </script>
 
 <div class="spiel-ansicht">
@@ -330,14 +374,16 @@
       </div>
 
       <div class="kapsel-segment timer-zentral">
-        <span class="label">{de.hud.timer.restzeit}</span>
+        <span class="label">{istVersteckphase ? de.hud.timer.versteckzeit : de.hud.timer.restzeit}</span>
         <span class="zeit">{restzeitText}</span>
       </div>
 
-      <div class="kapsel-segment ping-timer">
-        <span class="label">{de.hud.timer.naechsterPing}</span>
-        <span class="zeit">{naechsterPingText}</span>
-      </div>
+      {#if !istVersteckphase}
+        <div class="kapsel-segment ping-timer">
+          <span class="label">{de.hud.timer.naechsterPing}</span>
+          <span class="zeit">{naechsterPingText}</span>
+        </div>
+      {/if}
 
       <!-- Schnelltaste für Wake-Lock Toggle im Header -->
       <button
@@ -377,8 +423,13 @@
     </div>
   </div>
 
-  <!-- 2. WARNUNGEN (ZONENVERLASS / FUNKLOCH / GEGNER NÄHE) -->
-  {#if spielZustand.ausserhalbZone}
+  <!-- 2. WARNUNGEN (VERBINDUNG / ZONENVERLASS / FUNKLOCH / GEGNER NÄHE) -->
+  {#if verbindungsStatus === 'reconnect' || verbindungsStatus === 'nicht_erreichbar'}
+    <div class="warn-banner funkloch-warnung" role="status">
+      <div class="warn-titel">Verbindung unterbrochen</div>
+      <div class="warn-text">Neuer Versuch läuft automatisch. Lass die App geöffnet.</div>
+    </div>
+  {:else if spielZustand.ausserhalbZone}
     <div class="warn-banner zone-warnung">
       <div class="warn-titel">{de.hud.warnungen.zoneVerlassenTitel}</div>
       <div class="warn-text">{de.hud.warnungen.zoneVerlassenText}</div>
@@ -392,7 +443,7 @@
         <div class="warn-kulanz">Restdauer: {spielZustand.funklochRestSekunden}s</div>
       {/if}
     </div>
-  {:else if spielZustand.seekerInDerNaehe && (rolle === 'hider' || rolle === 'mrx')}
+  {:else if spielZustand.seekerInDerNaehe && (spielRolle === 'hider' || spielRolle === 'mrx' || spielRolle === 'mensch')}
     <div class="warn-banner seeker-warnung">
       <div class="warn-titel">{de.hud.warnungen.seekerNahTitel}</div>
       <div class="warn-text">{de.hud.warnungen.seekerNahText}</div>
@@ -448,14 +499,16 @@
       </button>
     {/if}
 
-    <button
-      type="button"
-      class="aktions-knopf sekundar"
-      onclick={() => (offenesSheet = 'faehigkeiten')}
-    >
-      <div class="energie-badge">{spielZustand.energie}⚡</div>
-      <span>{de.hud.aktionen.faehigkeiten}</span>
-    </button>
+    {#if faehigkeitenAktiv && spielRolle !== 'zuschauer'}
+      <button
+        type="button"
+        class="aktions-knopf sekundar"
+        onclick={() => (offenesSheet = 'faehigkeiten')}
+      >
+        <div class="energie-badge">{spielZustand.energie}⚡</div>
+        <span>{de.hud.aktionen.faehigkeiten}</span>
+      </button>
+    {/if}
 
     <button
       type="button"
@@ -474,19 +527,6 @@
       <span>{de.hud.aktionen.chat}</span>
     </button>
 
-    <button
-      type="button"
-      class="aktions-knopf sekundar qr-toggle"
-      onclick={() => (offenesSheet = 'qr')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect width="6" height="6" x="3" y="3" rx="1"/>
-        <rect width="6" height="6" x="15" y="3" rx="1"/>
-        <rect width="6" height="6" x="3" y="15" rx="1"/>
-        <path d="M15 15h2v2h-2zM19 15h2v6h-6v-2h4v-4zM15 19h2v2h-2z"/>
-      </svg>
-      <span>QR</span>
-    </button>
   </footer>
 
   <!-- 5. MODAL SHEETS -->
@@ -509,7 +549,7 @@
           <span class="energie-anzeige">Energie: {spielZustand.energie}/100 ⚡</span>
         </div>
         <div class="faehigkeiten-liste">
-          {#each Object.entries(de.faehigkeiten.katalog) as [id, f]}
+          {#each sichtbareFaehigkeiten as [id, f]}
             <div class="faehigkeit-karte">
               <div class="faehigkeit-info">
                 <h4>{f.name}</h4>
@@ -625,52 +665,6 @@
           Fahrt verbindlich buchen
         </button>
 
-      <!-- D. QR-SHEET -->
-      {:else if offenesSheet === 'qr'}
-        <div class="sheet-kopf">
-          <h3>QR-Fang & Nachweis</h3>
-        </div>
-
-        <div class="qr-sheet-inhalt">
-          {#if kannFangen}
-            <div class="qr-abschnitt">
-              <h4>Gegner per QR fangen</h4>
-              <p class="qr-hinweis">Gib den Code des gestellten Spielers ein, wenn das GPS-Signal ungenau oder gestört ist:</p>
-              <form class="qr-form" onsubmit={(e) => { e.preventDefault(); sendeQrFang(); }}>
-                <input
-                  type="text"
-                  bind:value={qrEingabeZielId}
-                  placeholder="Spieler-ID des Ziels"
-                  class="eingabe-feld"
-                  required
-                />
-                <input
-                  type="text"
-                  bind:value={qrEingabeToken}
-                  placeholder="8-stelliger Token"
-                  class="eingabe-feld"
-                  required
-                />
-                <button type="submit" class="haupt-knopf">
-                  QR-Fang bestätigen
-                </button>
-              </form>
-              {#if qrStatusMeldung}
-                <div class="qr-status">{qrStatusMeldung}</div>
-              {/if}
-            </div>
-          {:else}
-            <div class="qr-abschnitt">
-              <h4>Dein Fang-Token</h4>
-              <p class="qr-hinweis">Zeige diesen rotierenden Code dem Jäger, wenn du physisch gefangen wurdest:</p>
-              <div class="qr-token-box">
-                <span class="qr-spieler-id">{spielerId}</span>
-                <span class="qr-code-display">{aktuellerQrToken}</span>
-              </div>
-              <p class="qr-hinweis" style="text-align: center; margin-top: 8px;">Aktualisiert alle 30 Sekunden automatisch</p>
-            </div>
-          {/if}
-        </div>
       {/if}
     </div>
   {/if}
@@ -1242,47 +1236,4 @@
     cursor: pointer;
   }
 
-  .qr-sheet-inhalt {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .qr-form {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .qr-token-box {
-    background: #0f0f13;
-    border: 2px dashed #ff5c00;
-    border-radius: 16px;
-    padding: 20px;
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .qr-spieler-id {
-    color: #a3a3ad;
-    font-size: 0.85rem;
-  }
-
-  .qr-code-display {
-    font-family: inherit;
-    font-variant-numeric: tabular-nums;
-    font-size: 2.2rem;
-    font-weight: 800;
-    letter-spacing: 0.1em;
-    color: #00e599;
-  }
-
-  .qr-status {
-    color: #ff3b5c;
-    font-size: 0.85rem;
-    margin-top: 6px;
-    text-align: center;
-  }
 </style>

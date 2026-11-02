@@ -27,14 +27,14 @@ export async function verifiziereFirebaseToken(idToken?: string): Promise<AuthEr
     return {
       gueltig: true,
       uid: payload.sub as string,
-      istAnonym: payload.firebase?.sign_in_provider === 'anonymous'
+      istAnonym: (payload.firebase as { sign_in_provider?: string } | undefined)?.sign_in_provider === 'anonymous'
     };
   } catch {
-    // Fallback auf anonyme Session
+    // Ungültige Identitätstoken dürfen nicht als anonyme Anmeldung gelten.
     return {
-      gueltig: true,
-      uid: `anon_${Math.random().toString(36).substring(2, 10)}`,
-      istAnonym: true
+      gueltig: false,
+      uid: '',
+      istAnonym: false
     };
   }
 }

@@ -18,7 +18,7 @@ jobs:
       - name: pnpm einrichten
         uses: pnpm/action-setup@v3
         with:
-          version: 9
+          version: 9.15.9
 
       - name: Node.js 20 einrichten
         uses: actions/setup-node@v4
@@ -34,3 +34,6 @@ jobs:
 
       - name: Vitest Unit & Integrationstests ausfuehren
         run: pnpm test
+
+      - name: PWA bauen
+        run: pnpm build

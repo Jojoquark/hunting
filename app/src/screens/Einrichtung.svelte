@@ -10,7 +10,6 @@
   let { onfertig }: Props = $props();
 
   let standortStatus = $state<'unbekannt' | 'erlaubt' | 'abgelehnt'>('unbekannt');
-  let pushStatus = $state<'unbekannt' | 'erlaubt' | 'abgelehnt'>('unbekannt');
   let istIOS = $state(false);
 
   // Plattform-Erkennung
@@ -34,26 +33,13 @@
     );
   }
 
-  async function forderePushAn() {
-    if (!('Notification' in window)) {
-      alert('Benachrichtigungen werden nicht unterstützt.');
-      return;
-    }
-    const ergebnis = await Notification.requestPermission();
-    if (ergebnis === 'granted') {
-      pushStatus = 'erlaubt';
-    } else {
-      pushStatus = 'abgelehnt';
-    }
-  }
-
-  let bereit = $derived(standortStatus === 'erlaubt' && pushStatus === 'erlaubt');
+  let bereit = $derived(standortStatus === 'erlaubt');
 </script>
 
 <div class="einrichtung-screen">
   <header class="einrichtung-header">
     <h1 class="titel">Bereit für die Jagd?</h1>
-    <p class="untertitel">HUNTING benötigt 2 Freigaben, um ein faires GPS-Spiel ohne Schummeln zu garantieren.</p>
+    <p class="untertitel">Für eine Runde brauchst du eine Internetverbindung und Standortzugriff.</p>
   </header>
 
   <main class="schritte-liste">
@@ -65,7 +51,7 @@
           <h2 class="schritt-titel">Zum Home-Bildschirm hinzufügen</h2>
           <p class="schritt-erklaerung">
             {#if istIOS}
-              Tippe im Safari-Menü auf <strong>Teilen</strong> und wähle <strong>„Zum Home-Bildschirm“</strong>. Nur so laufen Push-Benachrichtigungen im Hintergrund zuverlässig.
+              Tippe im Safari-Menü auf <strong>Teilen</strong> und wähle <strong>„Zum Home-Bildschirm“</strong>. So läuft HUNTING im Vollbild.
             {:else}
               Installiere HUNTING als PWA über das Browsermenü für flüssiges Vollbild ohne Adressleiste.
             {/if}
@@ -86,8 +72,11 @@
             {/if}
           </div>
           <p class="schritt-erklaerung">
-            <strong>Warum?</strong> HUNTING berechnet Fänge und Zonenradien live. Deine Koordinaten werden nur während des aktiven Spiels verschlüsselt verarbeitet.
+            <strong>Warum?</strong> Der Spielserver verarbeitet deinen Standort für die Spielzone und Fangprüfung. Je nach Modus werden Standortinformationen mit Mitspielern geteilt.
           </p>
+            <p class="schritt-erklaerung">
+              Die Karte lädt Kartenausschnitte von OpenFreeMap. Dabei erhält der Kartendienst deine IP-Adresse und den angefragten Kartenausschnitt.
+            </p>
         </div>
       </div>
 
@@ -101,31 +90,17 @@
       {/if}
     </section>
 
-    <!-- Schritt 3: Web-Push (Funkloch-Schutz) -->
+    <!-- Schritt 3: Hintergrundbetrieb -->
     <section class="schritt-karte deckend">
       <div class="schritt-kopf">
         <div class="schritt-nummer">3</div>
         <div class="schritt-info">
-          <div class="titel-mit-status">
-            <h2 class="schritt-titel">Mitteilungen (Push)</h2>
-            {#if pushStatus === 'erlaubt'}
-              <span class="status-badge status-ok"><Icon name="check" size={14} /> Aktiv</span>
-            {/if}
-          </div>
+          <h2 class="schritt-titel">Während der Runde</h2>
           <p class="schritt-erklaerung">
-            <strong>Warum?</strong> Vor jedem Ping erhältst du 60 Sekunden vorher eine Warnung, die App kurz zu öffnen – so vermeidest du die gefürchtete <em>Funkloch-Strafe</em>!
+            Lass HUNTING im Vordergrund geöffnet und halte dein Display im Blick. Zuverlässige Hintergrund-Pushs sind derzeit nicht verfügbar.
           </p>
         </div>
       </div>
-
-      {#if pushStatus !== 'erlaubt'}
-        <div class="schritt-aktion">
-          <GlasKnopf variante="sekundaer" groesse="md" breit={true} onclick={forderePushAn}>
-            <Icon name="radar" size={18} />
-            <span>Push-Mitteilungen aktivieren</span>
-          </GlasKnopf>
-        </div>
-      {/if}
     </section>
 
     <!-- Sicherheits-Hinweis (Straßenverkehr) -->
@@ -261,12 +236,6 @@
 
   .schritt-erklaerung strong {
     color: var(--tinte);
-  }
-
-  .schritt-erklaerung em {
-    color: var(--akzent);
-    font-style: normal;
-    font-weight: 600;
   }
 
   .schritt-aktion {
